@@ -23,6 +23,7 @@ Public entry point:
 from __future__ import annotations
 
 import datetime as dt
+import getpass
 import hashlib
 import json
 import pathlib
@@ -40,7 +41,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from profiler import cle_candidate, profiler  # noqa: E402
 from store import CatalogueStore, load_store, scope_matches  # noqa: E402
 
-ENGINE_VERSION = "2.0.0"
+ENGINE_VERSION = "2.1.0"
+EVIDENCE_VERSION = "2.0"
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "evidence"
 
@@ -48,7 +50,15 @@ EVIDENCE_DIR = ROOT / "evidence"
 NUMERIC_TYPES = {"integer", "decimal", "float", "number"}
 DATE_TYPES = {"date", "datetime", "timestamp"}
 
-MAX_EXCEPTIONS_PER_CONTROL = 5000
+# Les quatre issues possibles d'un controle. SKIPPED n'est pas un echec : la
+# regle est active mais ses colonnes n'existent pas dans ce fichier. ERROR n'en
+# est pas un non plus : aucun verdict n'a pu etre rendu.
+STATUTS_RUN = ("PASS", "FAIL", "ERROR", "SKIPPED")
+
+# Les exceptions ne sont plus tronquees : un pack de preuves incomplet n'est pas
+# une preuve. Un appelant peut imposer une limite (run_dq(limite_exceptions=N)) ;
+# elle est alors tracee controle par controle dans results.json et au manifeste.
+MAX_EXCEPTIONS_PER_CONTROL = None
 
 
 # --------------------------------------------------------------------------- #
@@ -62,7 +72,7 @@ class ControlResult:
     template: str
     dataset: str
     cible: str
-    statut: str                     # PASS / FAIL / ERREUR / NON_APPLICABLE
+    statut: str                     # PASS / FAIL / ERROR / SKIPPED
     lignes_testees: int
     lignes_ko: int
     taux_ko_pct: float
@@ -76,6 +86,8 @@ class ControlResult:
     version: int
     duree_s: float
     message: str = ""
+    params: str = ""                # parametres exacts appliques (audit)
+    exceptions_completes: bool = True
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -105,16 +117,54 @@ class RunResult:
     def summary(self) -> dict:
         sc = self.scorecard
         if sc.empty:
-            return {"controles": 0, "pass": 0, "fail": 0, "erreur": 0}
+            return {"controls": 0, "pass": 0, "fail": 0, "error": 0,
+                    "skipped": 0, "rejected": len(self.rejets), "exceptions": 0,
+                    "rag": "GREEN"}
         return {
-            "controles": len(sc),
+            "controls": len(sc),
             "pass": int((sc["statut"] == "PASS").sum()),
             "fail": int((sc["statut"] == "FAIL").sum()),
-            "erreur": int((sc["statut"] == "ERREUR").sum()),
-            "non_applicable": int((sc["statut"] == "NON_APPLICABLE").sum()),
-            "rejets": len(self.rejets),
+            "error": int((sc["statut"] == "ERROR").sum()),
+            "skipped": int((sc["statut"] == "SKIPPED").sum()),
+            "rejected": len(self.rejets),
             "exceptions": int(len(self.exceptions)),
+            "rag": self.rag,
         }
+
+    @property
+    def rag(self) -> str:
+        return statut_global(self.resultats)
+
+
+# --------------------------------------------------------------------------- #
+# Statut global du run : un feu tricolore, des regles ecrites une seule fois
+# --------------------------------------------------------------------------- #
+GRAVITES_BLOQUANTES = {"Critical", "High"}
+
+
+def statut_global(resultats: list[ControlResult]) -> str:
+    """Rend RED / AMBER / GREEN pour l'ensemble d'un run.
+
+    L'ordre des regles est celui du pire cas :
+      - une erreur technique est rouge : un controle qui n'a pas rendu de
+        verdict ne peut pas etre presume passant ;
+      - un echec de gravite Critical ou High est rouge ;
+      - tout autre echec est orange ;
+      - un controle hors perimetre, sans echec, est orange : la couverture est
+        incomplete, ce n'est ni un succes franc ni une alerte ;
+      - le reste est vert.
+    """
+    statuts = [r.statut for r in resultats]
+    if "ERROR" in statuts:
+        return "RED"
+    echecs = [r for r in resultats if r.statut == "FAIL"]
+    if any(r.severity in GRAVITES_BLOQUANTES for r in echecs):
+        return "RED"
+    if echecs:
+        return "AMBER"
+    if "SKIPPED" in statuts:
+        return "AMBER"
+    return "GREEN"
 
 
 # --------------------------------------------------------------------------- #
@@ -272,18 +322,19 @@ def validate_control(control: dict, store: CatalogueStore,
     tid = control.get("template")
     tpl = store.template(tid)
     if tpl is None:
-        return [f"Template inconnu : '{tid}'"]
+        return [f"Unknown template: '{tid}'"]
     if tid not in EXECUTORS:
-        return [f"Template '{tid}' declare au catalogue mais non implemente par le moteur"]
+        return [f"Template '{tid}' declared in the catalogue but not implemented "
+                f"by the engine"]
 
     try:
         params = parse_params(control.get("params"))
     except (json.JSONDecodeError, ValueError) as exc:
-        return [f"Parametres JSON illisibles : {exc}"]
+        return [f"Unreadable JSON parameters: {exc}"]
 
     for group in required_param_groups(tpl.get("params_requis", "")):
         if not any(alt in params for alt in group):
-            errors.append(f"Parametre requis manquant : {' | '.join(group)}")
+            errors.append(f"Required parameter missing: {' | '.join(group)}")
     if errors:
         return errors
 
@@ -292,20 +343,20 @@ def validate_control(control: dict, store: CatalogueStore,
             try:
                 re.compile(str(valeur))
             except re.error as exc:
-                errors.append(f"Motif de colonnes invalide ({nom}) : {exc}")
+                errors.append(f"Invalid column pattern ({nom}): {exc}")
 
     if tid == "MATCHES_REGEX":
         try:
             re.compile(params["pattern"])
         except re.error as exc:
-            errors.append(f"Expression reguliere invalide : {exc}")
+            errors.append(f"Invalid regular expression: {exc}")
 
     if tid in ("FOREIGN_KEY", "COUNT_RECONCILIATION"):
         ref = params.get("ref_fichier")
         if not ref:
-            errors.append("Fichier de reference non renseigne")
+            errors.append("Reference file not set")
         elif not (pathlib.Path(root) / str(ref)).exists():
-            errors.append(f"Fichier de reference introuvable : '{ref}'")
+            errors.append(f"Reference file not found: '{ref}'")
 
     return errors
 
@@ -342,41 +393,41 @@ def applicabilite(template: str, params: dict, targets: list[list[str]],
     if template == "CUSTOM_EXPRESSION":
         manquantes = sorted(colonnes_d_expression(params.get("expression")) - presentes)
         if manquantes:
-            return "colonne(s) absente(s) du fichier : " + ", ".join(manquantes)
+            return "column(s) absent from the file: " + ", ".join(manquantes)
         return None
 
     if template == "COUNT_RECONCILIATION":
         manquantes = sorted(set(params.get("group_by") or []) - presentes)
         if manquantes:
-            return "colonne(s) absente(s) du fichier : " + ", ".join(manquantes)
+            return "column(s) absent from the file: " + ", ".join(manquantes)
         return None
 
     if template == "DATE_ORDER" and not targets and "motif_avant" in params:
-        return (f"aucune paire de dates ne correspond a "
-                f"'{params['motif_avant']}' puis '{params.get('motif_apres', '')}'")
+        return (f"no pair of dates matches "
+                f"'{params['motif_avant']}' then '{params.get('motif_apres', '')}'")
 
     if not targets or all(not t for t in targets):
         vise = (params.get("colonnes_motif") or params.get("column")
                 or params.get("motif_total") or params.get("total_column")
-                or "la cible")
-        return f"aucune colonne du fichier ne correspond a {vise}"
+                or "the target")
+        return f"no column in the file matches {vise}"
 
     for target in targets:
         if template == "ROW_SUM_RECONCILIATION" and len(target) < 2:
-            return (f"'{target[0]}' n'a aucune colonne de detail a sommer dans "
-                    f"ce fichier")
+            return (f"'{target[0]}' has no detail column to add up in this "
+                    f"file")
         for column in target:
             if column not in presentes:
-                return f"colonne absente du fichier : '{column}'"
+                return f"column absent from the file: '{column}'"
             typ = (colonne_du_profil(profil, column) or {}).get("type", "")
             if (template in ("RANGE", "SUM_RECONCILIATION",
                              "ROW_SUM_RECONCILIATION")
                     and typ not in NUMERIC_TYPES):
-                return (f"'{column}' n'est pas numerique dans ce fichier "
-                        f"(type deduit : {typ})")
+                return (f"'{column}' is not numeric in this file "
+                        f"(inferred type: {typ})")
             if template in ("FRESHNESS", "DATE_ORDER") and typ not in DATE_TYPES:
-                return (f"'{column}' n'est pas une date dans ce fichier "
-                        f"(type deduit : {typ})")
+                return (f"'{column}' is not a date in this file "
+                        f"(inferred type: {typ})")
     return None
 
 
@@ -389,7 +440,12 @@ def _exceptions(df: pd.DataFrame, mask: pd.Series, ctx: dict,
     ko = df.loc[mask]
     if ko.empty:
         return pd.DataFrame()
-    ko = ko.head(MAX_EXCEPTIONS_PER_CONTROL)
+    limite = ctx.get("limite_exceptions", MAX_EXCEPTIONS_PER_CONTROL)
+    if limite and len(ko) > limite:
+        # Une troncature n'est jamais silencieuse : elle est remontee au
+        # resultat du controle, puis au manifeste du pack de preuves.
+        ctx["exceptions_tronquees"] = True
+        ko = ko.head(limite)
     id_col = ctx.get("id_column")
     out = pd.DataFrame({
         "identifiant_ligne": ko[id_col] if id_col in ko.columns else ko.index.astype(str),
@@ -408,7 +464,7 @@ def ex_not_null(df, params, target, ctx):
     ko = int(mask.sum())
     n = len(df)
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de completude", _exceptions(df, mask, ctx, col, "Valeur absente", col)
+    return n, ko, kpi, "% completeness", _exceptions(df, mask, ctx, col, "Value missing", col)
 
 
 def ex_matches_regex(df, params, target, ctx):
@@ -421,8 +477,8 @@ def ex_matches_regex(df, params, target, ctx):
     n = int(notna.sum())
     ko = int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de valeurs valides", _exceptions(
-        df, mask, ctx, col, f"Ne respecte pas {pattern}", col)
+    return n, ko, kpi, "% valid values", _exceptions(
+        df, mask, ctx, col, f"Does not match {pattern}", col)
 
 
 def ex_in_domain(df, params, target, ctx):
@@ -432,8 +488,8 @@ def ex_in_domain(df, params, target, ctx):
     mask = notna & ~df[col].isin(values)
     n, ko = int(notna.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de valeurs valides", _exceptions(
-        df, mask, ctx, col, f"Hors domaine {sorted(values)}", col)
+    return n, ko, kpi, "% valid values", _exceptions(
+        df, mask, ctx, col, f"Outside the domain {sorted(values)}", col)
 
 
 def ex_range(df, params, target, ctx):
@@ -450,16 +506,16 @@ def ex_range(df, params, target, ctx):
         bornes.append(f"<= {params['max']}")
     n, ko = int(notna.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de valeurs dans la plage", _exceptions(
-        df, mask, ctx, col, f"Hors plage ({' et '.join(bornes)})", col)
+    return n, ko, kpi, "% values in range", _exceptions(
+        df, mask, ctx, col, f"Out of range ({' and '.join(bornes)})", col)
 
 
 def ex_unique_key(df, params, target, ctx):
     mask = df.duplicated(subset=target, keep=False)
     n, ko = len(df), int(mask.sum())
     kpi = round(100.0 * ko / n, 4) if n else 0.0
-    return n, ko, kpi, "taux de doublons %", _exceptions(
-        df, mask, ctx, " + ".join(target), "Cle presente plusieurs fois", target[0])
+    return n, ko, kpi, "duplicate rate %", _exceptions(
+        df, mask, ctx, " + ".join(target), "Key present more than once", target[0])
 
 
 def ex_foreign_key(df, params, target, ctx):
@@ -470,8 +526,8 @@ def ex_foreign_key(df, params, target, ctx):
     mask = notna & ~df[col].astype(str).isin(valid)
     n, ko = int(notna.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    motif = f"Absent de {params['ref_fichier']}.{params['ref_column']}"
-    return n, ko, kpi, "% de valeurs rattachees", _exceptions(df, mask, ctx, col, motif, col)
+    motif = f"Absent from {params['ref_fichier']}.{params['ref_column']}"
+    return n, ko, kpi, "% values matched", _exceptions(df, mask, ctx, col, motif, col)
 
 
 def ex_field_equals(df, params, target, ctx):
@@ -480,8 +536,8 @@ def ex_field_equals(df, params, target, ctx):
     mask = notna & (df[a].astype(str) != df[b].astype(str))
     n, ko = int(notna.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de lignes coherentes", _exceptions(
-        df, mask, ctx, f"{a} = {b}", "Champs divergents", a)
+    return n, ko, kpi, "% consistent rows", _exceptions(
+        df, mask, ctx, f"{a} = {b}", "Fields diverge", a)
 
 
 def ex_date_order(df, params, target, ctx):
@@ -492,17 +548,17 @@ def ex_date_order(df, params, target, ctx):
     mask = notna & (d1 > d2)
     n, ko = int(notna.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de lignes coherentes", _exceptions(
-        df, mask, ctx, f"{before} <= {after}", "Dates dans le desordre", before)
+    return n, ko, kpi, "% consistent rows", _exceptions(
+        df, mask, ctx, f"{before} <= {after}", "Dates out of order", before)
 
 
 def ex_freshness(df, params, target, ctx):
     col = target[0]
     dates = pd.to_datetime(df[col], errors="coerce")
     if dates.notna().sum() == 0:
-        return 1, 1, -1, "age maximum en jours", pd.DataFrame(
+        return 1, 1, -1, "maximum age in days", pd.DataFrame(
             [{"index_source": -1, "identifiant_ligne": "", "colonne": col,
-              "valeur": "", "motif": "Aucune date exploitable"}])
+              "valeur": "", "motif": "No usable date"}])
     age = (pd.Timestamp(ctx["as_of"]) - dates.max()).days
     limite = int(params["max_lag_days"])
     ko = 1 if age > limite else 0
@@ -511,8 +567,8 @@ def ex_freshness(df, params, target, ctx):
         exc = pd.DataFrame([{
             "index_source": -1, "identifiant_ligne": f"max({col})",
             "colonne": col, "valeur": str(dates.max().date()),
-            "motif": f"Anciennete {age} j > seuil {limite} j"}])
-    return 1, ko, age, "age maximum en jours", exc
+            "motif": f"Age {age} d > threshold {limite} d"}])
+    return 1, ko, age, "maximum age in days", exc
 
 
 def ex_sum_reconciliation(df, params, target, ctx):
@@ -538,7 +594,7 @@ def ex_sum_reconciliation(df, params, target, ctx):
     totaux = work[work[total_col] == total_val]
     parties = work[work[total_col] != total_val]
     if totaux.empty or not group_by:
-        return 0, 0, 0.0, "ecart relatif %", pd.DataFrame()
+        return 0, 0, 0.0, "relative gap %", pd.DataFrame()
 
     agg_total = totaux.groupby(group_by, dropna=False)[amount].sum().rename("total_declare")
     agg_parts = parties.groupby(group_by, dropna=False)[amount].sum().rename("somme_composantes")
@@ -552,21 +608,21 @@ def ex_sum_reconciliation(df, params, target, ctx):
     if sens == "parties_max":
         mask = comp["ecart_pct"] > tolerance
         kpi = round(float(comp["ecart_pct"].max()) if len(comp) else 0.0, 4)
-        kpi_nom = "depassement maximal %"
+        kpi_nom = "maximum overshoot %"
         motif = comp["ecart_pct"].map(
-            lambda v: f"Composantes superieures au total de {v:.2f}% (tolerance {tolerance}%)")
+            lambda v: f"Parts exceed the total by {v:.2f}% (tolerance {tolerance}%)")
     elif sens == "couverture_min":
         mask = comp["couverture_pct"] < couverture_min
         kpi = round(float(comp["couverture_pct"].median()) if len(comp) else 100.0, 4)
-        kpi_nom = "couverture mediane %"
+        kpi_nom = "median coverage %"
         motif = comp["couverture_pct"].map(
-            lambda v: f"Couverture {v:.2f}% < minimum {couverture_min}%")
+            lambda v: f"Coverage {v:.2f}% < minimum {couverture_min}%")
     else:
         mask = comp["ecart_pct"].abs() > tolerance
         kpi = round(float(comp["ecart_pct"].abs().median()) if len(comp) else 0.0, 4)
-        kpi_nom = "ecart relatif median %"
+        kpi_nom = "median relative gap %"
         motif = comp["ecart_pct"].map(
-            lambda v: f"Ecart {abs(v):.2f}% > tolerance {tolerance}%")
+            lambda v: f"Gap {abs(v):.2f}% > tolerance {tolerance}%")
 
     n, ko = len(comp), int(mask.sum())
     exc = pd.DataFrame()
@@ -605,9 +661,9 @@ def ex_row_sum_reconciliation(df, params, target, ctx):
     mask = testable & (ecart > marge + 1e-9)
     n, ko = int(testable.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    motif = (f"'{total}' differe de la somme de {' + '.join(parties)}"
-             + (f" au-dela de {tolerance:g} %" if tolerance else ""))
-    return n, ko, kpi, "% de lignes rapprochees", _exceptions(
+    motif = (f"'{total}' differs from the sum of {' + '.join(parties)}"
+             + (f" beyond {tolerance:g} %" if tolerance else ""))
+    return n, ko, kpi, "% reconciled rows", _exceptions(
         df, mask, ctx, total, motif, total)
 
 
@@ -622,8 +678,8 @@ def ex_count_reconciliation(df, params, target, ctx):
             exc = pd.DataFrame([{
                 "index_source": -1, "identifiant_ligne": "total",
                 "colonne": "COUNT(*)", "valeur": f"{len(df)} vs {len(ref)}",
-                "motif": f"Ecart de {ecart} lignes"}])
-        return 1, ko, ecart, "ecart en nombre de lignes", exc
+                "motif": f"Gap of {ecart} rows"}])
+        return 1, ko, ecart, "row count gap", exc
 
     left = df.groupby(group_by, dropna=False).size().rename("n_source")
     right = ref.groupby(group_by, dropna=False).size().rename("n_ref")
@@ -641,7 +697,7 @@ def ex_count_reconciliation(df, params, target, ctx):
             "valeur": bad.apply(lambda r: f"{int(r['n_source'])} vs {int(r['n_ref'])}", axis=1),
             "motif": "Effectifs divergents",
         }).reset_index(drop=True)
-    return n, ko, int(comp["ecart"].sum()), "ecart en nombre de lignes", exc
+    return n, ko, int(comp["ecart"].sum()), "row count gap", exc
 
 
 def ex_custom_expression(df, params, target, ctx):
@@ -652,8 +708,8 @@ def ex_custom_expression(df, params, target, ctx):
     mask = ~ok.fillna(False)
     n, ko = len(df), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    return n, ko, kpi, "% de lignes conformes", _exceptions(
-        df, mask, ctx, expr, f"Expression fausse : {expr}", ctx.get("id_column"))
+    return n, ko, kpi, "% compliant rows", _exceptions(
+        df, mask, ctx, expr, f"Expression false: {expr}", ctx.get("id_column"))
 
 
 EXECUTORS: dict[str, Callable] = {
@@ -687,12 +743,12 @@ def charger_fichier(path: pathlib.Path | str) -> pd.DataFrame:
     """Lit un CSV ou un classeur Excel. Le format vient de l'extension."""
     path = pathlib.Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Fichier introuvable : {path}")
+        raise FileNotFoundError(f"File not found: {path}")
     suffixe = path.suffix.lower()
     if suffixe not in FORMATS_SUPPORTES:
         raise ValueError(
-            f"Format '{suffixe}' non pris en charge. "
-            f"Attendu : {', '.join(sorted(FORMATS_SUPPORTES))}")
+            f"Format '{suffixe}' is not supported. "
+            f"Expected: {', '.join(sorted(FORMATS_SUPPORTES))}")
     if suffixe in (".xlsx", ".xlsm", ".xls"):
         return pd.read_excel(path)
     return pd.read_csv(path, low_memory=False)
@@ -734,7 +790,7 @@ class SourceLoader:
             return self._cache[cle]
         path = self.root / cle
         if not path.exists():
-            raise FileNotFoundError(f"Fichier de reference introuvable : {path}")
+            raise FileNotFoundError(f"Reference file not found: {path}")
         df = charger_fichier(path)
         self.enregistrer(cle, df, path)
         return df
@@ -743,13 +799,102 @@ class SourceLoader:
 # --------------------------------------------------------------------------- #
 # Phase 2/3 - Runner : un fichier, un contrat, un rapport
 # --------------------------------------------------------------------------- #
+def explication(statut: str, cible: str, n: int, ko: int, taux: float,
+                seuil: float, kpi_nom: str, kpi) -> str:
+    """Rend le verdict en une phrase chiffree, jamais vide.
+
+    L'audit exige qu'un echec porte son explication : « 12 lignes sur 1 500
+    (0,8 %) au-dela d'une tolerance de 0 % » se verifie a la main, « FAIL » non.
+    """
+    if statut == "SKIPPED":
+        return (f"no testable row for '{cible}' (every value is empty "
+                f"or unusable)")
+    if statut == "FAIL":
+        return (f"{ko:,} of {n:,} rows breach the rule on '{cible}' "
+                f"({taux:g} %), above the {seuil:g} % tolerance — "
+                f"{kpi_nom} = {kpi}").replace(",", " ")
+    return (f"{ko:,} of {n:,} rows breach the rule on '{cible}' ({taux:g} %), "
+            f"within the {seuil:g} % tolerance — {kpi_nom} = {kpi}"
+            ).replace(",", " ")
+
+
+def en_erreur(control: dict, message: str, dataset: str) -> ControlResult:
+    """Une regle qui casse avant meme d'etre executee reste tracee."""
+    return ControlResult(
+        rule_id=control["rule_id"],
+        control_name=control.get("control_name", ""),
+        dimension=control.get("control_type", ""),
+        template=control.get("template", ""),
+        dataset=dataset,
+        cible="-",
+        statut="ERROR",
+        lignes_testees=0,
+        lignes_ko=0,
+        taux_ko_pct=0.0,
+        kpi_nom="-",
+        kpi_valeur=-1,
+        seuil_pct=float(control.get("seuil_tolerance_pct") or 0),
+        severity=control.get("severity", ""),
+        owner=control.get("owner", ""),
+        frequency=control.get("frequency", ""),
+        remediation_action=control.get("remediation_action", ""),
+        version=int(control.get("version", 1)),
+        duree_s=0.0,
+        message=message,
+        params=str(control.get("params") or ""),
+    )
+
+
+# Les attributs d'une regle tels qu'ils sont figes dans le pack de preuves :
+# la configuration exacte appliquee, parametres et seuils compris (annexe B.2,
+# « Rule Configuration » et « Execution Parameters »).
+CHAMPS_REGLE_EXECUTEE = [
+    "rule_id", "control_name", "control_type", "description", "template",
+    "params", "logic_definition", "dataset_scope", "data_element",
+    "seuil_tolerance_pct", "severity", "frequency", "owner", "output_type",
+    "kpi", "remediation_action", "statut", "version", "effective_from",
+]
+
+
+def regles_executees(store: CatalogueStore, resultats: list[ControlResult],
+                     rejets: list[dict]) -> list[dict]:
+    """Fige la definition integrale des regles reellement passees par le moteur.
+
+    Le snapshot du catalogue contient TOUT le catalogue ; ce fichier-ci ne
+    contient que ce qui a tourne, avec l'empreinte de chaque regle. C'est lui
+    qui repond a « quelle regle, avec quels parametres et quel seuil ? » sans
+    obliger l'auditeur a trier.
+    """
+    vues = [r.rule_id for r in resultats] + [r.get("rule_id") for r in rejets]
+    ordonnees = list(dict.fromkeys(v for v in vues if v))
+    figees = []
+    for rule_id in ordonnees:
+        ctrl = store.control(rule_id)
+        if ctrl is None:
+            continue
+        regle = {champ: ctrl.get(champ, "") for champ in CHAMPS_REGLE_EXECUTEE}
+        regle["params_resolus"] = _params_lisibles(ctrl)
+        regle["rule_sha256"] = sha256_obj(regle)
+        figees.append(regle)
+    return figees
+
+
+def _params_lisibles(control: dict) -> dict:
+    try:
+        return parse_params(control.get("params"))
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+
 def run_dq(fichier: pathlib.Path | str,
            dataset: str | None = None,
            store: CatalogueStore | None = None,
            run_label: str = "",
            write_evidence: bool = True,
            as_of: dt.date | None = None,
-           root: pathlib.Path = ROOT) -> RunResult:
+           root: pathlib.Path = ROOT,
+           limite_exceptions: int | None = MAX_EXCEPTIONS_PER_CONTROL) -> RunResult:
     """Controle un fichier unique, quel qu'il soit.
 
     Aucun contrat n'est requis et aucun n'est detecte : le fichier est profile
@@ -791,6 +936,7 @@ def run_dq(fichier: pathlib.Path | str,
         "as_of": as_of,
         "store": store,
         "dataset": nom,
+        "limite_exceptions": limite_exceptions,
     }
 
     applicables = [c for c in store.controls
@@ -807,7 +953,7 @@ def run_dq(fichier: pathlib.Path | str,
             template=control["template"],
             dataset=nom,
             cible="-",
-            statut="NON_APPLICABLE",
+            statut="SKIPPED",
             lignes_testees=0,
             lignes_ko=0,
             taux_ko_pct=0.0,
@@ -821,6 +967,7 @@ def run_dq(fichier: pathlib.Path | str,
             version=int(control.get("version", 1)),
             duree_s=0.0,
             message=raison,
+            params=str(control.get("params") or ""),
         )
 
     for control in applicables:
@@ -833,12 +980,21 @@ def run_dq(fichier: pathlib.Path | str,
             log(f"{control['rule_id']} REJETE : {errors[0]}")
             continue
 
-        params = parse_params(control["params"])
-        targets = resolve_targets(control["template"], params, profil)
-        raison = applicabilite(control["template"], params, targets, profil)
+        # Le diagnostic d'applicabilite est lui aussi execute sous filet : une
+        # regle qui casse ici ne doit pas emporter les autres controles du run.
+        try:
+            params = parse_params(control["params"])
+            targets = resolve_targets(control["template"], params, profil)
+            raison = applicabilite(control["template"], params, targets, profil)
+        except Exception as exc_obj:  # noqa: BLE001 - reporte, jamais avale
+            message = f"{type(exc_obj).__name__}: {exc_obj}"
+            resultats.append(en_erreur(control, message, nom))
+            log(f"{control['rule_id']} ERROR (resolution de cible) : {message}")
+            continue
+
         if raison:
             resultats.append(hors_perimetre(control, raison))
-            log(f"{control['rule_id']} NON_APPLICABLE : {raison}")
+            log(f"{control['rule_id']} SKIPPED : {raison}")
             continue
 
         executor = EXECUTORS[control["template"]]
@@ -846,18 +1002,21 @@ def run_dq(fichier: pathlib.Path | str,
         for target in targets:
             t0 = time.perf_counter()
             cible = " + ".join(target) if target else params.get("expression", "-")
+            ctx.pop("exceptions_tronquees", None)
             try:
                 n, ko, kpi, kpi_nom, exc = executor(df, params, target, ctx)
                 seuil = float(control.get("seuil_tolerance_pct") or 0)
                 taux = round(100.0 * ko / n, 4) if n else 0.0
-                statut = "NON_APPLICABLE" if n == 0 else ("PASS" if taux <= seuil else "FAIL")
-                message = ""
+                statut = "SKIPPED" if n == 0 else ("PASS" if taux <= seuil else "FAIL")
+                message = explication(statut, cible, n, ko, taux, seuil,
+                                      kpi_nom, kpi)
             except Exception as exc_obj:  # noqa: BLE001 - reporte, jamais avale
                 n = ko = 0
                 kpi, kpi_nom, taux, seuil = -1, "-", 0.0, 0.0
-                statut, message = "ERREUR", f"{type(exc_obj).__name__}: {exc_obj}"
+                statut, message = "ERROR", f"{type(exc_obj).__name__}: {exc_obj}"
                 exc = pd.DataFrame()
-                log(f"{control['rule_id']} ERREUR : {message}")
+                log(f"{control['rule_id']} ERROR : {message}")
+            completes = not ctx.pop("exceptions_tronquees", False)
 
             if not exc.empty:
                 exc.insert(0, "dataset", nom)
@@ -886,6 +1045,8 @@ def run_dq(fichier: pathlib.Path | str,
                 version=int(control.get("version", 1)),
                 duree_s=round(time.perf_counter() - t0, 3),
                 message=message,
+                params=str(control.get("params") or ""),
+                exceptions_completes=completes,
             ))
             log(f"{control['rule_id']} {cible[:40]:<40} {statut:<14} "
                 f"{kpi_nom}={kpi} ({ko}/{n} KO)")
@@ -899,23 +1060,34 @@ def run_dq(fichier: pathlib.Path | str,
         "templates": store.templates,
         "controls": store.controls,
     }
+    executees = regles_executees(store, resultats, rejets)
+    tronques = [r.rule_id for r in resultats if not r.exceptions_completes]
     manifeste = {
+        "evidence_version": EVIDENCE_VERSION,
         "run_id": run_id,
         "libelle": run_label,
         "horodatage": dt.datetime.now().isoformat(timespec="seconds"),
         "as_of": as_of.isoformat(),
+        "statut_global": statut_global(resultats),
         "moteur_version": ENGINE_VERSION,
         "python": platform.python_version(),
         "pandas": pd.__version__,
         "machine": platform.node(),
+        "utilisateur_systeme": getpass.getuser(),
         "fichier_controle": str(fichier).replace("\\", "/"),
         "fichier_nom": nom,
         "profil_fichier": profil,
         "identifiant_de_ligne": id_ligne,
         "sources": loader.hashes,
         "catalogue_sha256": sha256_obj(catalogue_snapshot),
+        "regles_executees_sha256": sha256_obj(executees),
+        "regles_executees": len(executees),
         "controles_actifs": len(store.active_controls()),
+        "limite_exceptions": limite_exceptions,
+        "exceptions_completes": not tronques,
+        "exceptions_tronquees_pour": tronques,
         "duree_totale_s": round(time.perf_counter() - started, 3),
+        "rejeu": ("engine/dq_engine.py --replay evidence/" + run_id),
     }
 
     result = RunResult(
@@ -934,29 +1106,300 @@ def run_dq(fichier: pathlib.Path | str,
     log(f"Termine en {manifeste['duree_totale_s']}s | {result.summary()}")
 
     if write_evidence:
-        result.evidence_path = write_evidence_pack(result, catalogue_snapshot)
-        log(f"Evidence pack : {result.evidence_path}")
+        # Le journal est clos AVANT l'ecriture du pack : sans cela, la derniere
+        # ligne arriverait apres le calcul de son empreinte, et `checksums.json`
+        # signalerait un journal falsifie a chaque run.
+        log(f"Evidence pack : {EVIDENCE_DIR / run_id}")
+        result.evidence_path = write_evidence_pack(result, catalogue_snapshot,
+                                                   executees)
     return result
 
 
-def write_evidence_pack(result: RunResult, catalogue_snapshot: dict) -> pathlib.Path:
+def resume_du_run(result: RunResult) -> dict:
+    """Le « Control Results » de l'annexe B.2 : metriques et KPI, par controle."""
+    resume = result.summary()
+    return {
+        "run_id": result.run_id,
+        "horodatage": result.horodatage,
+        "fichier": result.manifeste.get("fichier_nom", ""),
+        "statut_global": resume.get("rag", statut_global(result.resultats)),
+        "totaux": resume,
+        "par_dimension": _compter(result.resultats, lambda r: r.dimension),
+        "par_severite": _compter(result.resultats, lambda r: r.severity),
+        "controles": [
+            {"rule_id": r.rule_id, "control_name": r.control_name,
+             "cible": r.cible, "statut": r.statut, "severity": r.severity,
+             "seuil_pct": r.seuil_pct, "taux_ko_pct": r.taux_ko_pct,
+             "lignes_testees": r.lignes_testees, "lignes_ko": r.lignes_ko,
+             "kpi_nom": r.kpi_nom, "kpi_valeur": r.kpi_valeur,
+             "message": r.message, "version": r.version,
+             "exceptions_completes": r.exceptions_completes}
+            for r in result.resultats],
+    }
+
+
+def _compter(resultats: list[ControlResult], cle) -> dict:
+    compte: dict[str, dict[str, int]] = {}
+    for r in resultats:
+        ligne = compte.setdefault(str(cle(r)), {s: 0 for s in STATUTS_RUN})
+        ligne[r.statut] = ligne.get(r.statut, 0) + 1
+    return compte
+
+
+def write_evidence_pack(result: RunResult, catalogue_snapshot: dict,
+                        executees: list[dict] | None = None) -> pathlib.Path:
+    """Ecrit les dix pieces de l'annexe B.2, puis leurs empreintes.
+
+    `checksums.json` est ecrit en dernier et couvre tous les autres fichiers :
+    il permet a un auditeur de detecter la modification d'une piece apres coup,
+    sans rien connaitre du moteur.
+    """
     out = EVIDENCE_DIR / result.run_id
     out.mkdir(parents=True, exist_ok=True)
-    (out / "manifest.json").write_text(
-        json.dumps(result.manifeste, ensure_ascii=False, indent=2), encoding="utf-8")
-    (out / "catalogue_snapshot.json").write_text(
-        json.dumps(catalogue_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    (out / "results.json").write_text(
-        json.dumps([r.as_dict() for r in result.resultats], ensure_ascii=False, indent=2),
-        encoding="utf-8")
-    (out / "rejets.json").write_text(
-        json.dumps(result.rejets, ensure_ascii=False, indent=2), encoding="utf-8")
-    result.exceptions.to_csv(out / "exceptions.csv", index=False, encoding="utf-8-sig")
+
+    def ecrire(nom: str, contenu) -> None:
+        (out / nom).write_text(
+            json.dumps(contenu, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8")
+
+    ecrire("manifest.json", result.manifeste)
+    ecrire("catalogue_snapshot.json", catalogue_snapshot)
+    ecrire("executed_rules.json", executees or [])
+    ecrire("results.json", [r.as_dict() for r in result.resultats])
+    ecrire("summary.json", resume_du_run(result))
+    ecrire("rejected_rules.json", result.rejets)
+    result.exceptions.to_csv(out / "exceptions.csv", index=False,
+                             encoding="utf-8-sig")
     (out / "execution.log").write_text("\n".join(result.journal), encoding="utf-8")
+
+    ecrire("checksums.json", {
+        "sha256": {f.name: sha256_file(f) for f in sorted(out.iterdir())
+                   if f.is_file() and f.name != "checksums.json"},
+        "genere_le": dt.datetime.now().isoformat(timespec="seconds"),
+    })
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Phase 4 - Audit : verifier un pack, puis le rejouer
+#
+# Ces deux fonctions sont ecrites pour un tiers : elles ne supposent rien de la
+# session qui a produit le pack, seulement les fichiers presents sur disque.
+# --------------------------------------------------------------------------- #
+PIECES_OBLIGATOIRES = [
+    "manifest.json", "catalogue_snapshot.json", "executed_rules.json",
+    "results.json", "summary.json", "exceptions.csv", "execution.log",
+    "checksums.json",
+]
+
+
+def _lire_json(chemin: pathlib.Path):
+    return json.loads(chemin.read_text(encoding="utf-8"))
+
+
+def verifier_pack(pack: pathlib.Path | str, root: pathlib.Path = ROOT) -> dict:
+    """Verifie qu'un pack de preuves est complet, intact et coherent.
+
+    Sept controles, dans l'ordre ou un auditeur les poserait : les pieces
+    sont-elles la, n'ont-elles pas bouge, le fichier controle est-il toujours
+    celui qui a ete lu, les regles figees sont-elles bien celles qui ont tourne,
+    et les resultats concordent-ils avec les exceptions livrees.
+
+    Rend un rapport structure ; ne leve jamais.
+    """
+    pack = pathlib.Path(pack)
+    controles: list[dict] = []
+
+    def noter(nom: str, ok: bool | None, detail: str) -> None:
+        controles.append({"controle": nom, "statut": "OK" if ok else
+                          ("N/A" if ok is None else "GAP"), "detail": detail})
+
+    manquantes = [p for p in PIECES_OBLIGATOIRES if not (pack / p).exists()]
+    noter("Mandatory components (appendix B.2)", not manquantes,
+          "all required files are present" if not manquantes
+          else "missing: " + ", ".join(manquantes))
+    if not (pack / "manifest.json").exists():
+        return {"pack": pack.name, "verdict": "GAP", "controles": controles}
+
+    manifeste = _lire_json(pack / "manifest.json")
+
+    # 1. Integrite interne : les pieces n'ont pas ete modifiees apres coup.
+    if (pack / "checksums.json").exists():
+        attendus = _lire_json(pack / "checksums.json").get("sha256", {})
+        alteres = [nom for nom, empreinte in attendus.items()
+                   if not (pack / nom).exists()
+                   or sha256_file(pack / nom) != empreinte]
+        noter("Integrity of the pack files", not alteres,
+              f"{len(attendus)} file(s) checked, none altered" if not alteres
+              else "fingerprint differs: " + ", ".join(alteres))
+    else:
+        noter("Integrity of the pack files", None, "checksums.json missing")
+
+    # 2. Le fichier controle est-il toujours celui qui a ete lu ?
+    for nom, source in (manifeste.get("sources") or {}).items():
+        chemin = pathlib.Path(source.get("chemin", ""))
+        if not chemin.is_absolute():
+            chemin = root / chemin
+        if not chemin.exists():
+            noter(f"Input dataset « {nom} »", None,
+                  f"file no longer on disk: {source.get('chemin')}")
+        else:
+            reel = sha256_file(chemin)
+            noter(f"Input dataset « {nom} »", reel == source.get("sha256"),
+                  f"SHA-256 matches ({reel[:16]}…)" if reel == source.get("sha256")
+                  else f"the file changed since the run ({reel[:16]}… "
+                       f"instead of {str(source.get('sha256'))[:16]}…)")
+
+    # 3. Le catalogue fige est-il bien celui dont l'empreinte est au manifeste ?
+    if (pack / "catalogue_snapshot.json").exists():
+        reel = sha256_obj(_lire_json(pack / "catalogue_snapshot.json"))
+        noter("Catalogue fingerprint", reel == manifeste.get("catalogue_sha256"),
+              "the snapshot matches the fingerprint in the manifest" if
+              reel == manifeste.get("catalogue_sha256") else
+              "the snapshot does not match the declared fingerprint")
+
+    # 4. Les regles figees sont-elles celles qui ont tourne ?
+    if (pack / "executed_rules.json").exists():
+        executees = _lire_json(pack / "executed_rules.json")
+        reel = sha256_obj(executees)
+        noter("Executed rules fingerprint",
+              reel == manifeste.get("regles_executees_sha256"),
+              f"{len(executees)} rule(s) frozen, fingerprint matches" if
+              reel == manifeste.get("regles_executees_sha256") else
+              "the frozen rules do not match the declared fingerprint")
+        if (pack / "results.json").exists():
+            resultats = _lire_json(pack / "results.json")
+            connues = {r["rule_id"] for r in executees}
+            orphelines = sorted({r["rule_id"] for r in resultats} - connues)
+            noter("Traceability rule -> result", not orphelines,
+                  "every result maps back to a frozen rule" if not orphelines
+                  else "results with no frozen rule: " + ", ".join(orphelines))
+
+    # 5. Les exceptions livrees correspondent-elles aux resultats ?
+    if (pack / "results.json").exists() and (pack / "exceptions.csv").exists():
+        resultats = _lire_json(pack / "results.json")
+        try:
+            exceptions = pd.read_csv(pack / "exceptions.csv")
+        except (pd.errors.EmptyDataError, OSError):
+            exceptions = pd.DataFrame(columns=["rule_id"])
+        complet = all(r.get("exceptions_completes", True) for r in resultats)
+        echecs = {r["rule_id"] for r in resultats if r["statut"] == "FAIL"}
+        documentes = set(exceptions["rule_id"]) if len(exceptions) else set()
+        sans_preuve = sorted(echecs - documentes)
+        noter("Exception dataset complete", complet,
+              f"{len(exceptions)} row(s) in breach, nothing truncated" if complet
+              else "exceptions were truncated for: "
+                   + ", ".join(manifeste.get("exceptions_tronquees_pour", [])))
+        noter("Every breach carries its rows", not sans_preuve,
+              "every failed control has its rows in the exception report"
+              if not sans_preuve else
+              "breaches with no exception row: " + ", ".join(sans_preuve))
+
+    # 6. Chaque verdict porte-t-il une explication exploitable ?
+    if (pack / "results.json").exists():
+        resultats = _lire_json(pack / "results.json")
+        muets = [r["rule_id"] for r in resultats
+                 if r["statut"] in ("FAIL", "SKIPPED", "ERROR")
+                 and not str(r.get("message") or "").strip()]
+        noter("Explanation of every outcome", not muets,
+              "every FAIL, SKIPPED and ERROR carries its reason" if not muets
+              else "no explanation for: " + ", ".join(muets))
+
+    verdict = ("GAP" if any(c["statut"] == "GAP" for c in controles)
+               else "VERIFIED")
+    return {"pack": pack.name, "verdict": verdict,
+            "run_id": manifeste.get("run_id", pack.name),
+            "statut_global": manifeste.get("statut_global", ""),
+            "controles": controles}
+
+
+def store_du_snapshot(snapshot: dict) -> CatalogueStore:
+    """Reconstruit un catalogue en memoire depuis un snapshot de pack.
+
+    Rejouer un run avec le catalogue d'aujourd'hui ne prouverait rien : c'est
+    la definition figee au moment du run qu'il faut reappliquer.
+    """
+    store = CatalogueStore(EVIDENCE_DIR / "_snapshot_en_memoire.json")
+    store.data = {"meta": snapshot.get("meta", {}),
+                  "templates": snapshot.get("templates", []),
+                  "controls": snapshot.get("controls", []),
+                  "changelog": []}
+    return store
+
+
+CHAMPS_COMPARES = ["statut", "lignes_testees", "lignes_ko", "taux_ko_pct",
+                   "kpi_valeur"]
+
+
+def rejouer_pack(pack: pathlib.Path | str, root: pathlib.Path = ROOT) -> dict:
+    """Rejoue un run a partir de son seul pack, et compare les resultats.
+
+    Le rejeu reprend le fichier d'origine, le catalogue fige et la date de
+    reference du run. Deux executions identiques doivent rendre exactement les
+    memes verdicts, les memes volumes et les memes KPI ; seuls le `run_id` et
+    l'horodatage different, par construction.
+    """
+    pack = pathlib.Path(pack)
+    manifeste = _lire_json(pack / "manifest.json")
+    chemin = pathlib.Path(manifeste["fichier_controle"])
+    if not chemin.is_absolute():
+        chemin = root / chemin
+    if not chemin.exists():
+        return {"rejouable": False,
+                "motif": f"the original file cannot be found: {chemin}"}
+
+    empreinte = sha256_file(chemin)
+    attendue = (manifeste.get("sources", {})
+                .get(manifeste.get("fichier_nom", ""), {}).get("sha256"))
+    if attendue and empreinte != attendue:
+        return {"rejouable": False,
+                "motif": ("the original file changed since the run: "
+                          f"{empreinte[:16]}… instead of {attendue[:16]}…")}
+
+    store = store_du_snapshot(_lire_json(pack / "catalogue_snapshot.json"))
+    rejeu = run_dq(chemin, dataset=manifeste.get("fichier_nom"), store=store,
+                   run_label=f"Replay of {manifeste.get('run_id')}",
+                   write_evidence=False,
+                   as_of=dt.date.fromisoformat(manifeste["as_of"]),
+                   root=root,
+                   limite_exceptions=manifeste.get("limite_exceptions"))
+
+    avant = {(r["rule_id"], r["cible"]): r for r in _lire_json(pack / "results.json")}
+    apres = {(r.rule_id, r.cible): r.as_dict() for r in rejeu.resultats}
+    differences = []
+    for cle in sorted(set(avant) | set(apres), key=str):
+        a, b = avant.get(cle), apres.get(cle)
+        if a is None or b is None:
+            differences.append({"controle": " · ".join(cle),
+                                "champ": "presence",
+                                "origine": "missing" if a is None else "present",
+                                "rejeu": "missing" if b is None else "present"})
+            continue
+        for champ in CHAMPS_COMPARES:
+            if str(a.get(champ)) != str(b.get(champ)):
+                differences.append({"controle": " · ".join(cle), "champ": champ,
+                                    "origine": a.get(champ), "rejeu": b.get(champ)})
+    return {
+        "rejouable": True,
+        "identique": not differences,
+        "controles_compares": len(set(avant) | set(apres)),
+        "differences": differences,
+        "statut_global_origine": manifeste.get("statut_global", ""),
+        "statut_global_rejeu": rejeu.rag,
+        "exceptions_origine": int(len(pd.read_csv(pack / "exceptions.csv"))
+                                  if (pack / "exceptions.csv").stat().st_size > 3
+                                  else 0),
+        "exceptions_rejeu": int(len(rejeu.exceptions)),
+    }
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) > 2 and argv[1] == "--verify":
+        print(json.dumps(verifier_pack(argv[2]), ensure_ascii=False, indent=2))
+        return 0
+    if len(argv) > 2 and argv[1] == "--replay":
+        print(json.dumps(rejouer_pack(argv[2]), ensure_ascii=False, indent=2))
+        return 0
     fichier = argv[1] if len(argv) > 1 else "data/prepared/bis_turnover.csv"
     nom = argv[2] if len(argv) > 2 else None
     res = run_dq(fichier, dataset=nom, run_label="Execution en ligne de commande")

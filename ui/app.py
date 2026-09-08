@@ -4,10 +4,10 @@ DQ Compass - couche de controle qualite generique, pilotee par catalogue.
 L'interface suit le cycle de vie impose par le brief (§4, « Functional
 architecture ») et en reprend le vocabulaire, ecran par ecran :
 
-    ① Catalogue de controles   Control Catalogue  DEFINES
-    ② Execution                Data Quality Engine  EXECUTES
-    ③ Restitution              Reporting Layer  REPORTS
-    ④ Piste d'audit            Audit Layer  EVIDENCES
+    ① Control catalogue   Control Catalogue  DEFINES
+    ② Execution           Data Quality Engine  EXECUTES
+    ③ Reporting           Reporting Layer  REPORTS
+    ④ Audit trail         Audit Layer  EVIDENCES
 
 Trois partis pris tiennent l'ensemble :
 
@@ -26,14 +26,19 @@ Trois partis pris tiennent l'ensemble :
 3. AUCUN JARGON. Personne ne lit `MATCHES_REGEX` ni `{"column": "montant"}`.
    Ce vocabulaire vient du catalogue, pas du code de l'interface.
 
+L'interface parle anglais ; les commentaires du code restent en francais, comme
+dans le reste du depot.
+
     streamlit run ui/app.py
 """
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import pathlib
 import sys
+import zipfile
 
 import altair as alt
 import pandas as pd
@@ -44,7 +49,8 @@ sys.path.insert(0, str(ROOT / "engine"))
 sys.path.insert(0, str(ROOT / "reporting"))
 
 from dq_engine import (EVIDENCE_DIR, applicabilite, charger_fichier,  # noqa: E402
-                       parse_params, resolve_targets, run_dq, validate_control)
+                       parse_params, rejouer_pack, resolve_targets, run_dq,
+                       validate_control, verifier_pack)
 from excel_report import build_workbook  # noqa: E402
 from profiler import cle_candidate, profiler  # noqa: E402
 from store import (SEVERITES, SEVERITES_AIDE, STATUTS,  # noqa: E402
@@ -65,14 +71,14 @@ DOSSIERS_CONNUS = [ROOT / "data" / "entrees", ROOT / "data" / "prepared",
                    ROOT / "data" / "ref", ROOT / "data" / "exemples"]
 EXTENSIONS = {".csv", ".xlsx", ".xls", ".xlsm"}
 
-# Les six dimensions du brief (§2.2), dans son ordre, avec leur nom courant.
+# Les six dimensions du brief (§2.2), dans son ordre et sous ses propres noms.
 DIMENSIONS = {
-    "Completeness": "Complétude",
-    "Validity": "Validité",
-    "Uniqueness": "Unicité",
-    "Consistency": "Cohérence",
-    "Timeliness": "Fraîcheur",
-    "Reconciliation": "Réconciliation",
+    "Completeness": "Completeness",
+    "Validity": "Validity",
+    "Uniqueness": "Uniqueness",
+    "Consistency": "Consistency",
+    "Timeliness": "Timeliness",
+    "Reconciliation": "Reconciliation",
 }
 
 # Les 14 attributs obligatoires du catalogue (annexe A.2), dans l'ordre du brief.
@@ -88,26 +94,35 @@ ATTRIBUTS_BRIEF = {
 
 # Les composants obligatoires de l'evidence pack (annexe B.2) et leur support.
 PIECES_AUDIT = [
-    ("Run ID", "manifest.json", "run_id"),
-    ("Execution Timestamp", "manifest.json", "horodatage"),
-    ("Dataset Reference", "manifest.json", "sources + profil_fichier"),
-    ("Rule Configuration", "catalogue_snapshot.json", "définition intégrale"),
-    ("Execution Parameters", "manifest.json", "as_of + paramètres des règles"),
-    ("Control Results", "results.json", "verdicts et KPI"),
-    ("Exception Dataset", "exceptions.csv", "lignes en écart"),
-    ("Logs", "execution.log", "journal d'exécution"),
-    ("System Trace", "manifest.json", "moteur, Python, pandas, machine"),
-    ("Sign-off Fields", "signoff.json", "validation humaine (facultatif)"),
+    ("Run ID", "manifest.json", "unique execution identifier"),
+    ("Execution Timestamp", "manifest.json", "date, time and as-of date"),
+    ("Dataset Reference", "manifest.json", "path, SHA-256, row count, profile"),
+    ("Rule Configuration", "executed_rules.json", "full definition of every rule run"),
+    ("Execution Parameters", "executed_rules.json", "parameters and thresholds applied"),
+    ("Control Results", "results.json", "verdict, KPI and explanation per control"),
+    ("Exception Dataset", "exceptions.csv", "every failing row, untruncated"),
+    ("Logs", "execution.log", "step-by-step execution log"),
+    ("System Trace", "manifest.json", "engine, Python, pandas, machine, user"),
+    ("Sign-off Fields", "signoff.json", "human validation (optional)"),
+]
+
+# Pieces complementaires : elles ne figurent pas a l'annexe B.2 mais rendent le
+# pack verifiable par un tiers sans rien connaitre du moteur.
+PIECES_COMPLEMENT = [
+    ("Summary", "summary.json", "run totals, RAG status, per-dimension counts"),
+    ("Catalogue snapshot", "catalogue_snapshot.json", "the whole catalogue, frozen"),
+    ("Rejected rules", "rejected_rules.json", "rules refused by the validator"),
+    ("Checksums", "checksums.json", "SHA-256 of every file in this pack"),
 ]
 
 # Les quatre etapes du cycle de vie (§4 du brief), chacune avec sa couleur.
 # La meme teinte porte l'entree de menu, l'en-tete de l'ecran et son cartouche :
 # on sait ou l'on se trouve dans le cycle sans lire une ligne.
 ETAPES = [
-    ("①", "Catalogue de contrôles", "Control Catalogue", "DÉFINIT", "#9B87E0"),
-    ("②", "Exécution", "Data Quality Engine", "EXÉCUTE", "#5A9DF8"),
-    ("③", "Restitution", "Reporting Layer", "RESTITUE", "#2FBFA8"),
-    ("④", "Piste d'audit", "Audit Layer", "PROUVE", "#9AAAB8"),
+    ("①", "Control catalogue", "Control Catalogue", "DEFINES", "#9B87E0"),
+    ("②", "Execution", "Data Quality Engine", "EXECUTES", "#5A9DF8"),
+    ("③", "Reporting", "Reporting Layer", "REPORTS", "#2FBFA8"),
+    ("④", "Audit trail", "Audit Layer", "EVIDENCES", "#9AAAB8"),
 ]
 
 # Surfaces de l'interface. Le fond de l'application est noir - impose une fois
@@ -195,27 +210,33 @@ def bandeau_etape(index: int, description: str) -> None:
 # palette : vert et rouge ne sont jamais adjacents (ecart CVD 4,1 -> 10,7).
 # La pastille double la couleur, qui ne porte donc jamais seule le sens.
 STATUTS_VUE = [
-    ("PASS", "Sans écart", "🟢", "#0ca30c"),
-    ("NON_APPLICABLE", "Hors périmètre", "⚪", "#898781"),
-    ("ERREUR", "Erreur technique", "🟠", "#fab219"),
-    ("FAIL", "En échec", "🔴", "#d03b3b"),
+    ("PASS", "Passed", "🟢", "#0ca30c"),
+    ("SKIPPED", "Skipped", "⚪", "#898781"),
+    ("ERROR", "Technical error", "🟠", "#fab219"),
+    ("FAIL", "In breach", "🔴", "#d03b3b"),
 ]
 # Teinte unique des barres de magnitude : 4,30:1 sur fond clair, 3,94:1 sur fond
 # sombre - lisible sans connaitre le theme de l'utilisateur.
 TEINTE_MAGNITUDE = "#2a78d6"
 
-PUCE_STATUT = {"Actif": "🟢", "Suspendu": "🟠", "Deprecie": "⚪"}
-PUCE_RUN = {"PASS": "🟢", "FAIL": "🔴", "ERREUR": "🟠", "NON_APPLICABLE": "⚪"}
-
-TOLERANCES = {
-    "Aucun écart toléré": 0.0,
-    "Jusqu'à 1 % des lignes": 1.0,
-    "Jusqu'à 5 % des lignes": 5.0,
-    "Jusqu'à 10 % des lignes": 10.0,
+# Le feu tricolore du run, tel que le moteur le calcule (dq_engine.statut_global).
+RAG_VUE = {
+    "GREEN": ("🟢", "#3FD37A", "#071A0F", "#1E5233"),
+    "AMBER": ("🟠", "#F5B33C", "#1C1405", "#5C4520"),
+    "RED": ("🔴", "#FF6B6B", "#20090A", "#5C2226"),
 }
 
-FREQUENCES = ["Quotidienne", "Hebdomadaire", "Mensuelle", "Trimestrielle",
-              "Annuelle", "A la demande"]
+PUCE_STATUT = {"Actif": "🟢", "Suspendu": "🟠", "Deprecie": "⚪"}
+PUCE_RUN = {"PASS": "🟢", "FAIL": "🔴", "ERROR": "🟠", "SKIPPED": "⚪"}
+
+TOLERANCES = {
+    "No breach tolerated": 0.0,
+    "Up to 1 % of rows": 1.0,
+    "Up to 5 % of rows": 5.0,
+    "Up to 10 % of rows": 10.0,
+}
+
+FREQUENCES = ["Daily", "Weekly", "Monthly", "Quarterly", "Annual", "On demand"]
 
 PARAM_COLONNE = {"column", "field_a", "field_b", "before", "after", "amount",
                  "total_column"}
@@ -240,6 +261,11 @@ def enregistrer(store: CatalogueStore, message: str) -> None:
 def afficher_flash() -> None:
     if message := st.session_state.pop("flash", None):
         st.success(message)
+
+
+def nombre(valeur) -> str:
+    """Un millier se lit avec une espace, jamais avec une virgule."""
+    return f"{int(valeur):,}".replace(",", " ")
 
 
 def lire_fichier(chemin: pathlib.Path) -> tuple[pd.DataFrame, list[dict], list[dict]]:
@@ -321,27 +347,26 @@ def selecteur_de_colonnes() -> None:
     puiser.
     """
     connues = colonnes_vues()
-    titre = (f"📋 Colonnes disponibles ({len(connues)})" if connues
-             else "📋 Aucune colonne connue — chargez un fichier")
+    titre = (f"📋 Columns available ({len(connues)})" if connues
+             else "📋 No column known yet — load a file")
     with st.expander(titre, expanded=not connues):
-        st.caption("L'éditeur ne connaît aucune structure de fichier : il n'y a "
-                   "plus de schéma déclaré. Chargez un fichier pour que ses "
-                   "colonnes soient proposées dans les listes ci-dessous. "
-                   "Seul l'en-tête est lu.")
+        st.caption("The editor knows no file structure: there is no declared "
+                   "schema any more. Load a file and its columns will be "
+                   "offered in the lists below. Only the header is read.")
         g, d = st.columns(2)
         with g:
             connus = fichiers_connus()
             choix = st.selectbox(
-                "Un fichier déjà présent", connus, index=None,
-                placeholder="Choisir un fichier…", key="edit_fichier_connu",
+                "A file already present", connus, index=None,
+                placeholder="Pick a file…", key="edit_fichier_connu",
                 format_func=lambda p: p.name)
             if choix is not None:
                 try:
                     retenir_entetes(choix.stem, entetes_du_fichier(choix))
                 except (ValueError, FileNotFoundError) as exc:
-                    st.error(f"Lecture impossible : {exc}")
+                    st.error(f"Cannot read the file: {exc}")
         with d:
-            depose = st.file_uploader("Ou déposer un fichier",
+            depose = st.file_uploader("Or drop a file",
                                       type=["csv", "xlsx", "xls", "xlsm"],
                                       key="edit_fichier_depose")
             if depose is not None:
@@ -350,9 +375,9 @@ def selecteur_de_colonnes() -> None:
                 chemin.write_bytes(depose.getbuffer())
                 try:
                     retenir_entetes(chemin.stem, entetes_du_fichier(chemin))
-                    st.caption(f"Enregistré dans `data/entrees/{depose.name}`")
+                    st.caption(f"Saved to `data/entrees/{depose.name}`")
                 except (ValueError, FileNotFoundError) as exc:
-                    st.error(f"Lecture impossible : {exc}")
+                    st.error(f"Cannot read the file: {exc}")
 
         vus = st.session_state.get("profils_vus", {})
         if vus:
@@ -360,9 +385,9 @@ def selecteur_de_colonnes() -> None:
                 st.markdown(f"**`{nom}`** — "
                             + ", ".join(f"`{c['colonne']}`" for c in profil))
         else:
-            st.info("Vous pouvez aussi écrire une règle sans fichier : "
-                    "choisissez **Motif des colonnes visées** plutôt qu'une "
-                    "colonne nommée. C'est ce que fait tout le socle livré.")
+            st.info("You can also write a rule without any file: pick "
+                    "**Column name pattern** instead of a named column. That is "
+                    "how every shipped rule is written.")
 
 
 def params_du_template(tpl: dict) -> tuple[list[list[str]], list[str]]:
@@ -419,7 +444,7 @@ def fiche(paires: list[tuple[str, str]]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ① Catalogue de controles - DEFINES
+# ① Control catalogue - DEFINES
 # --------------------------------------------------------------------------- #
 def couverture_dimensions(store: CatalogueStore) -> dict[str, int]:
     compte = {d: 0 for d in DIMENSIONS}
@@ -436,46 +461,45 @@ def widget_param(nom: str, tpl: dict, valeur, cle: str):
     if nom == "colonnes_motif" or nom.startswith("motif_"):
         return st.text_input(
             label, value=valeur or "", key=cle, placeholder="(?i)(^|_)id$",
-            help="Expression régulière sur le NOM des colonnes. La règle "
-                 "s'appliquera à toute colonne dont le nom correspond, dans "
-                 "tous les fichiers concernés — y compris ceux qui n'existent "
-                 "pas encore.")
+            help="Regular expression on the column NAME. The rule applies to "
+                 "every column whose name matches, in every file in scope — "
+                 "including files that do not exist yet.")
     if nom in PARAM_COLONNE:
         if colonnes:
-            options = colonnes + ["✏️ Saisir un autre nom…"]
+            options = colonnes + ["✏️ Type another name…"]
             index = options.index(valeur) if valeur in options else None
             choix = st.selectbox(label, options, index=index,
-                                 placeholder="Choisir une colonne…", key=cle)
-            if choix == "✏️ Saisir un autre nom…":
-                return st.text_input(f"{label} (nom exact)", value="", key=f"{cle}_libre")
+                                 placeholder="Pick a column…", key=cle)
+            if choix == "✏️ Type another name…":
+                return st.text_input(f"{label} (exact name)", value="", key=f"{cle}_libre")
             return choix
         return st.text_input(label, value=valeur or "", key=cle,
-                             help="Contrôlez un fichier une première fois et ses "
-                                  "colonnes seront proposées ici.")
+                             help="Run a control on a file once and its columns "
+                                  "will be offered here.")
     if nom in PARAM_NOMBRE:
         return st.number_input(label, value=float(valeur) if valeur is not None else 0.0,
                                step=1.0, key=cle)
     if nom == "values":
         brut = st.text_input(
-            label, key=cle, placeholder="CDI, CDD, Stage",
+            label, key=cle, placeholder="PERMANENT, FIXED_TERM, INTERNSHIP",
             value=", ".join(str(v) for v in valeur) if isinstance(valeur, list)
             else (valeur or ""),
-            help="Séparez les valeurs par des virgules.")
+            help="Separate the values with commas.")
         return [v.strip() for v in brut.split(",") if v.strip()]
     if nom in ("columns", "group_by"):
         defaut = valeur if isinstance(valeur, list) else []
         if colonnes:
             return st.multiselect(label, colonnes, key=cle,
-                                  placeholder="Choisir une ou plusieurs colonnes…",
+                                  placeholder="Pick one or more columns…",
                                   default=[c for c in defaut if c in colonnes])
         brut = st.text_input(label, value=", ".join(defaut), key=cle,
-                             placeholder="colonne_a, colonne_b")
+                             placeholder="column_a, column_b")
         return [v.strip() for v in brut.split(",") if v.strip()]
     if nom == "ref_fichier":
         options = fichiers_de_reference()
         return st.selectbox(label, options,
                             index=options.index(valeur) if valeur in options else None,
-                            placeholder="Choisir un fichier de référence…", key=cle)
+                            placeholder="Pick a reference file…", key=cle)
     if nom == "ref_column":
         ref = st.session_state.get("param_ref_fichier")
         options: list[str] = []
@@ -490,9 +514,9 @@ def widget_param(nom: str, tpl: dict, valeur, cle: str):
                             index=options.index(valeur) if valeur in options else 0,
                             key=cle)
     if nom == "sens":
-        options = {"parties_max": "Les parties ne doivent pas dépasser le total",
-                   "couverture_min": "Les parties doivent couvrir un minimum du total",
-                   "bilateral": "Tout écart compte, dans les deux sens"}
+        options = {"parties_max": "The parts must never exceed the total",
+                   "couverture_min": "The parts must cover a minimum of the total",
+                   "bilateral": "Any gap counts, in either direction"}
         cles = list(options)
         return st.selectbox(label, cles,
                             index=cles.index(valeur) if valeur in cles else 0,
@@ -503,19 +527,19 @@ def widget_param(nom: str, tpl: dict, valeur, cle: str):
 def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None) -> None:
     creation = control is None
     control = control or {}
-    st.subheader("Créer une règle de contrôle" if creation
-                 else f"Modifier {control['rule_id']} · "
+    st.subheader("Create a control rule" if creation
+                 else f"Edit {control['rule_id']} · "
                       f"version {control.get('version', 1)}")
 
-    st.markdown("#### 1. Que voulez-vous vérifier ?")
+    st.markdown("#### 1. What do you want to check?")
     simples = [t for t in store.templates if t.get("niveau", "simple") == "simple"]
     avances = [t for t in store.templates if t.get("niveau") == "avance"]
 
     tid_courant = control.get("template")
     avance_courant = any(t["template_id"] == tid_courant for t in avances)
-    mode_avance = st.toggle("Afficher les règles avancées", value=avance_courant,
-                            help="Réconciliations et conditions sur mesure. "
-                                 "Réservées aux profils data.")
+    mode_avance = st.toggle("Show advanced rules", value=avance_courant,
+                            help="Reconciliations and custom conditions. For "
+                                 "data profiles only.")
     proposes = simples + avances if mode_avance else simples
 
     def etiquette(t: dict) -> str:
@@ -523,35 +547,35 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
 
     index = next((i for i, t in enumerate(proposes)
                   if t["template_id"] == tid_courant), 0)
-    tpl = st.radio("Type de vérification", proposes, index=index,
+    tpl = st.radio("Type of check", proposes, index=index,
                    format_func=etiquette, key="edit_template",
                    label_visibility="collapsed")
     st.info(f"**{etiquette(tpl)}** — {tpl.get('explication', '')}  \n"
-            f"*Exemple : {tpl.get('exemple_metier', '—')}*")
+            f"*Example: {tpl.get('exemple_metier', '—')}*")
 
-    st.markdown(f"#### 2. {tpl.get('question_metier', 'Sur quelles données ?')}")
+    st.markdown(f"#### 2. {tpl.get('question_metier', 'On which data?')}")
     selecteur_de_colonnes()
     scope_defaut = str(control.get("dataset_scope", "*")).strip() or "*"
-    tous = st.checkbox("Appliquer à tous les fichiers, présents et à venir",
+    tous = st.checkbox("Apply to every file, present and future",
                        value=scope_defaut == "*",
-                       help="Combiné à un ciblage par motif de colonnes, la règle "
-                            "se propage seule aux fichiers qui n'existent pas encore.")
+                       help="Combined with a column-name pattern, the rule "
+                            "spreads on its own to files that do not exist yet.")
     if tous:
         scope = "*"
     else:
         scope = st.text_input(
-            "Fichiers concernés", value="" if scope_defaut == "*" else scope_defaut,
-            placeholder="ventes_*  ou  bis_turnover, inventaire",
-            help="Nom de fichier sans extension. Le caractère * remplace "
-                 "n'importe quelle suite de caractères. Séparez par des virgules.")
+            "Files in scope", value="" if scope_defaut == "*" else scope_defaut,
+            placeholder="sales_*  or  bis_turnover, inventory",
+            help="File name without extension. The * character stands for any "
+                 "sequence of characters. Separate with commas.")
         vus = list(st.session_state.get("profils_vus", {}))
         if vus:
-            st.caption("Fichiers vus pendant cette session : "
+            st.caption("Files seen during this session: "
                        + ", ".join(f"`{v}`" for v in vus))
         if scope.strip():
             couverts = [v for v in vus if scope_matches(scope, v)]
             if couverts:
-                st.caption("✅ Couvre : " + ", ".join(f"`{c}`" for c in couverts))
+                st.caption("✅ Covers: " + ", ".join(f"`{c}`" for c in couverts))
 
     params_actuels: dict = {}
     if control.get("params") and control.get("template") == tpl["template_id"]:
@@ -569,7 +593,8 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
             etiquettes = {g: libelle_param(tpl, g) for g in groupe}
             defaut = next((a for a in groupe if a in params_actuels), groupe[0])
             choisi = st.radio(
-                "Comment désigner la cible ?", [etiquettes[g] for g in groupe],
+                "How should the target be designated?",
+                [etiquettes[g] for g in groupe],
                 index=groupe.index(defaut), horizontal=True,
                 key=f"choix_{'_'.join(groupe)}")
             nom_param = next(g for g in groupe if etiquettes[g] == choisi)
@@ -579,7 +604,7 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
             params[nom_param] = valeur
 
     if optionnels:
-        with st.expander("Réglages complémentaires",
+        with st.expander("Additional settings",
                          expanded=any(o in params_actuels for o in optionnels)):
             for nom_param in optionnels:
                 if st.checkbox(libelle_param(tpl, nom_param),
@@ -590,64 +615,64 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
                     if valeur not in (None, "", []):
                         params[nom_param] = valeur
 
-    st.markdown("#### 3. Que se passe-t-il en cas d'écart ?")
+    st.markdown("#### 3. What happens when the rule is breached?")
     c1, c2 = st.columns(2)
     with c1:
         severity = st.selectbox(
-            "Gravité", SEVERITES, format_func=libelle_severite,
+            "Severity", SEVERITES, format_func=libelle_severite,
             index=SEVERITES.index(control["severity"])
             if control.get("severity") in SEVERITES else 2)
         st.caption(SEVERITES_AIDE.get(severity, ""))
 
         seuil_actuel = float(control.get("seuil_tolerance_pct") or 0)
-        etiquettes = list(TOLERANCES) + ["Seuil personnalisé"]
+        etiquettes = list(TOLERANCES) + ["Custom threshold"]
         defaut_tol = next((i for i, k in enumerate(TOLERANCES)
                            if TOLERANCES[k] == seuil_actuel), len(etiquettes) - 1)
-        choix_tol = st.selectbox("Tolérance avant échec", etiquettes, index=defaut_tol,
-                                 help="Part de lignes en écart admise avant que le "
-                                      "contrôle ne soit déclaré en échec.")
-        seuil = (st.number_input("Seuil personnalisé (%)", value=seuil_actuel,
+        choix_tol = st.selectbox("Tolerance before failure", etiquettes,
+                                 index=defaut_tol,
+                                 help="Share of breaching rows accepted before "
+                                      "the control is declared failed.")
+        seuil = (st.number_input("Custom threshold (%)", value=seuil_actuel,
                                  min_value=0.0, max_value=100.0, step=0.5)
-                 if choix_tol == "Seuil personnalisé" else TOLERANCES[choix_tol])
+                 if choix_tol == "Custom threshold" else TOLERANCES[choix_tol])
     with c2:
-        owner = st.text_input("Qui doit intervenir ?",
-                              control.get("owner", "Data Steward"))
+        owner = st.text_input("Who must act?", control.get("owner", "Data Steward"))
         frequency = st.selectbox(
-            "À quelle fréquence contrôler ?", FREQUENCES,
+            "How often should this run?", FREQUENCES,
             index=FREQUENCES.index(control["frequency"])
             if control.get("frequency") in FREQUENCES else 3)
     remediation = st.text_area(
-        "Que doit faire cette personne ?", height=80,
+        "What must that person do?", height=80,
         value=control.get("remediation_action", ""),
-        placeholder="Corriger le fichier à la source et redemander une extraction.")
+        placeholder="Fix the file at the source and request a fresh extract.")
 
-    st.markdown("#### 4. Nommer la règle")
+    st.markdown("#### 4. Name the rule")
     phrase = phrase_controle({"template": tpl["template_id"],
                               "params": json.dumps(params, ensure_ascii=False)}, store)
     c3, c4 = st.columns(2)
     with c3:
-        nom = st.text_input("Nom de la règle", control.get("control_name", ""),
-                            placeholder="Complétude du montant notionnel")
+        nom = st.text_input("Rule name", control.get("control_name", ""),
+                            placeholder="Completeness of the notional amount")
     with c4:
         description = st.text_area(
-            "Pourquoi cette règle existe", height=68,
+            "Why this rule exists", height=68,
             value=control.get("description", ""),
-            placeholder="Une opération sans montant n'est pas exploitable en aval.")
+            placeholder="A transaction without an amount is unusable downstream.")
     motif = st.text_input(
-        "Motif de l'enregistrement (conservé au journal)",
-        placeholder="Demandé par le comité qualité du 8 septembre")
+        "Reason for the change (kept in the change log)",
+        placeholder="Requested by the data quality committee of 8 September")
 
-    st.markdown("##### Récapitulatif")
-    portee = "tous les fichiers" if scope.strip() in ("", "*") else scope
+    st.markdown("##### Summary")
+    portee = "every file" if scope.strip() in ("", "*") else scope
     st.markdown(
         f"""<div style="background:{FOND_CARTE};border:1px solid {BORDURE};
         border-left:4px solid {ETAPES[0][4]};border-radius:10px;
         padding:16px 20px;font-size:16px;line-height:1.5;">{phrase}<br>
-        <span style="font-size:13px;color:{TEXTE_SOURDINE};">Sur {portee} · gravité
-        {libelle_severite(severity).lower()} · tolérance {seuil:g} % ·
-        {owner} intervient · contrôle {frequency.lower()}</span></div>""",
+        <span style="font-size:13px;color:{TEXTE_SOURDINE};">On {portee} ·
+        severity {libelle_severite(severity).lower()} · tolerance {seuil:g} % ·
+        {owner} acts · runs {frequency.lower()}</span></div>""",
         unsafe_allow_html=True)
-    with st.expander("Détail technique"):
+    with st.expander("Technical detail"):
         st.code(json.dumps({"template": tpl["template_id"], "params": params,
                             "dataset_scope": scope}, ensure_ascii=False, indent=2),
                 language="json")
@@ -669,47 +694,46 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
 
     manques = []
     if not nom.strip():
-        manques.append("le nom de la règle")
+        manques.append("the rule name")
     if not description.strip():
-        manques.append("la raison d'être de la règle")
+        manques.append("why the rule exists")
     if not remediation.strip():
-        manques.append("l'action à mener en cas d'écart")
+        manques.append("the action to take when it breaches")
 
     erreurs = validate_control(candidat, store)
 
     if manques:
-        st.warning("Il manque encore " + ", ".join(manques) + ".")
+        st.warning("Still missing: " + ", ".join(manques) + ".")
     if erreurs:
-        st.error("La règle est refusée par le validateur :\n\n"
+        st.error("The validator refuses this rule:\n\n"
                  + "\n".join(f"- {e}" for e in erreurs))
     if not manques and not erreurs:
-        st.success("Règle valide. Elle s'exécutera sur les fichiers de sa portée "
-                   "dont les colonnes correspondent.")
+        st.success("Rule is valid. It will run on the files in its scope whose "
+                   "columns match.")
 
-    if st.button("Enregistrer la règle", type="primary",
+    if st.button("Save the rule", type="primary",
                  disabled=bool(manques or erreurs)):
         if creation:
             cree = store.add_control(candidat, utilisateur,
-                                     motif or "Création via l'interface")
-            enregistrer(store, f"Règle {cree['rule_id']} créée.")
+                                     motif or "Created from the interface")
+            enregistrer(store, f"Rule {cree['rule_id']} created.")
         else:
             store.update_control(control["rule_id"], candidat, utilisateur,
-                                 motif or "Modification via l'interface")
-            enregistrer(store, f"Règle {control['rule_id']} mise à jour "
+                                 motif or "Edited from the interface")
+            enregistrer(store, f"Rule {control['rule_id']} updated "
                                f"(version {store.control(control['rule_id'])['version']}).")
         st.session_state.pop("edition", None)
         st.rerun()
 
 
 def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
-    bandeau_etape(0, "Le référentiel central de toutes les règles. Aucune "
-                     "d'elles ne nomme une colonne : elles ciblent des "
-                     "conventions de nommage, et s'appliquent donc à des "
-                     "fichiers qui n'existent pas encore.")
+    bandeau_etape(0, "The central repository of every rule. None of them names a "
+                     "column: they target naming conventions, and therefore "
+                     "apply to files that do not exist yet.")
     afficher_flash()
 
     if "edition" in st.session_state:
-        if st.button("← Revenir au catalogue"):
+        if st.button("← Back to the catalogue"):
             st.session_state.pop("edition")
             st.rerun()
         rid = st.session_state["edition"]
@@ -718,39 +742,39 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
 
     couverture = couverture_dimensions(store)
     couvertes = sum(1 for v in couverture.values() if v)
-    st.markdown("##### Couverture des six dimensions du brief")
+    st.markdown("##### Coverage of the six dimensions of the brief")
     tuiles([(DIMENSIONS[d], str(n), "#0ca30c" if n else "#d03b3b")
             for d, n in couverture.items()])
     if couvertes < len(DIMENSIONS):
         manquantes = [DIMENSIONS[d] for d, n in couverture.items() if not n]
-        st.caption(f"⚠️ {len(manquantes)} dimension(s) sans aucune règle active : "
-                   + ", ".join(manquantes) + ". L'écran **Exécution** en propose "
-                   "automatiquement à partir de n'importe quel fichier.")
+        st.caption(f"⚠️ {len(manquantes)} dimension(s) with no active rule: "
+                   + ", ".join(manquantes) + ". The **Execution** screen "
+                   "proposes some automatically from any file.")
 
     st.divider()
     df = pd.DataFrame(store.controls)
     creer, agir = st.columns([1, 2])
     with creer:
-        if st.button("➕ Créer une règle", type="primary", width='stretch'):
+        if st.button("➕ Create a rule", type="primary", width='stretch'):
             st.session_state["edition"] = None
             st.rerun()
-        st.caption("Quatre étapes, en français. Vous pouvez y charger un "
-                   "fichier pour récupérer ses colonnes.")
+        st.caption("Four steps, in plain language. You can load a file there to "
+                   "pull in its columns.")
     with agir:
         rid = st.selectbox(
-            "Agir sur une règle existante", [""] + list(df["rule_id"]),
-            placeholder="Choisir une règle…",
+            "Act on an existing rule", [""] + list(df["rule_id"]),
+            placeholder="Pick a rule…",
             format_func=lambda r: "" if not r
             else f"{r} · {store.control(r)['control_name']}")
 
     c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-    f_dim = c1.multiselect("Dimension", list(DIMENSIONS), placeholder="Toutes",
+    f_dim = c1.multiselect("Dimension", list(DIMENSIONS), placeholder="All",
                            format_func=lambda d: DIMENSIONS[d])
-    f_sev = c2.multiselect("Gravité", SEVERITES, placeholder="Toutes",
+    f_sev = c2.multiselect("Severity", SEVERITES, placeholder="All",
                            format_func=libelle_severite)
-    f_statut = c3.multiselect("État", STATUTS, default=["Actif"],
-                              placeholder="Tous", format_func=libelle_statut)
-    f_texte = c4.text_input("Rechercher", placeholder="un mot du nom ou de la règle…")
+    f_statut = c3.multiselect("State", STATUTS, default=["Actif"],
+                              placeholder="All", format_func=libelle_statut)
+    f_texte = c4.text_input("Search", placeholder="a word from the name or the rule…")
 
     vue = df.copy()
     if f_dim:
@@ -763,57 +787,57 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
         vue = vue[vue.astype(str).apply(
             lambda r: f_texte.lower() in " ".join(r).lower(), axis=1)]
 
-    st.caption(f"{len(vue)} règle(s) affichée(s) sur {len(df)} — "
-               f"{len(store.active_controls())} en service")
+    st.caption(f"{len(vue)} rule(s) shown out of {len(df)} — "
+               f"{len(store.active_controls())} in service")
     if vue.empty:
-        st.info("Aucune règle ne correspond à ces filtres.")
+        st.info("No rule matches these filters.")
     else:
         st.dataframe(pd.DataFrame({
             "": vue["statut"].map(PUCE_STATUT),
-            "Règle": vue["rule_id"],
-            "Nom": vue["control_name"],
+            "Rule": vue["rule_id"],
+            "Name": vue["control_name"],
             "Dimension": vue["control_type"].map(lambda d: DIMENSIONS.get(d, d)),
-            "Ce qui est vérifié": [phrase_controle(c, store)
-                                   for c in vue.to_dict("records")],
-            "S'applique à": vue["dataset_scope"].map(
-                lambda s: "tous les fichiers" if str(s).strip() in ("", "*") else s),
-            "Gravité": vue["severity"].map(libelle_severite),
-            "Tolérance": vue["seuil_tolerance_pct"].map(lambda v: f"{float(v or 0):g} %"),
-            "Responsable": vue["owner"],
+            "What is checked": [phrase_controle(c, store)
+                                for c in vue.to_dict("records")],
+            "Applies to": vue["dataset_scope"].map(
+                lambda s: "every file" if str(s).strip() in ("", "*") else s),
+            "Severity": vue["severity"].map(libelle_severite),
+            "Tolerance": vue["seuil_tolerance_pct"].map(lambda v: f"{float(v or 0):g} %"),
+            "Owner": vue["owner"],
             "Version": vue["version"],
         }), width='stretch', hide_index=True)
 
-        with st.expander("Les 14 attributs exigés par le brief (annexe A.2)"):
-            st.caption("Chaque règle porte les quatorze attributs standardisés, "
-                       "sous les noms du brief.")
+        with st.expander("The 14 attributes required by the brief (appendix A.2)"):
+            st.caption("Every rule carries the fourteen standardised attributes, "
+                       "under the names used by the brief.")
             st.dataframe(vue[list(ATTRIBUTS_BRIEF)].rename(columns=ATTRIBUTS_BRIEF),
                          width='stretch', hide_index=True)
             st.download_button(
-                "⬇️ Extraire le catalogue (CSV)",
+                "⬇️ Export the catalogue (CSV)",
                 data=vue[list(ATTRIBUTS_BRIEF)].rename(columns=ATTRIBUTS_BRIEF)
                 .to_csv(index=False).encode("utf-8-sig"),
                 file_name="catalogue_extract.csv", mime="text/csv",
-                help="Le « Catalogue extract » attendu par la cartographie "
-                     "prudentielle (annexe C.2).")
+                help="The « Catalogue extract » expected by the supervisory "
+                     "mapping (appendix C.2).")
 
     retirees = [c for c in store.controls if c["statut"] == "Deprecie"]
     if retirees:
-        with st.expander(f"🧹 {len(retirees)} règle(s) retirée(s) du service"):
+        with st.expander(f"🧹 {len(retirees)} rule(s) retired from service"):
             st.caption(
-                "Ces règles ne s'exécutent plus. Elles restent visibles pour "
-                "mémoire — filtrez sur l'état « Retiré » pour les lire. Vous "
-                "pouvez les supprimer en bloc : leur définition partira au "
-                "journal, où elle reste consultable.")
+                "These rules no longer run. They stay visible for the record — "
+                "filter on the « Retired » state to read them. You can delete "
+                "them in bulk: their definition goes to the change log, where "
+                "it stays readable.")
             motif_purge = st.text_input(
-                "Motif de la purge", key="motif_purge",
-                placeholder="Règles héritées d'un jeu de données qui n'est plus suivi")
-            if st.button(f"Supprimer les {len(retirees)} règles retirées",
+                "Reason for the purge", key="motif_purge",
+                placeholder="Rules inherited from a dataset no longer monitored")
+            if st.button(f"Delete the {len(retirees)} retired rules",
                          disabled=not motif_purge.strip()):
                 for c in retirees:
                     store.delete_control(c["rule_id"],
                                          utilisateur or "data.steward", motif_purge)
-                enregistrer(store, f"{len(retirees)} règle(s) retirée(s) "
-                                   f"supprimées. Définitions conservées au journal.")
+                enregistrer(store, f"{len(retirees)} retired rule(s) deleted. "
+                                   f"Definitions kept in the change log.")
                 st.rerun()
 
     if not rid:
@@ -822,43 +846,43 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
 
     ctrl = store.control(rid)
     st.info(f"**{ctrl['control_name']}**  \n{phrase_controle(ctrl, store)}  \n"
-            f"*{ctrl['description'] or 'Aucune raison d’être documentée.'}*")
-    motif = st.text_input("Motif (conservé au journal)", key="motif_action")
+            f"*{ctrl['description'] or 'No documented rationale.'}*")
+    motif = st.text_input("Reason (kept in the change log)", key="motif_action")
     a1, a2, a3, a4 = st.columns(4)
-    if a1.button("✏️ Modifier", width='stretch'):
+    if a1.button("✏️ Edit", width='stretch'):
         st.session_state["edition"] = rid
         st.rerun()
-    if a2.button("⏸️ Mettre en pause", width='stretch',
+    if a2.button("⏸️ Pause", width='stretch',
                  disabled=ctrl["statut"] == "Suspendu"):
-        store.set_statut(rid, "Suspendu", utilisateur, motif or "Mise en pause")
-        enregistrer(store, f"{rid} mise en pause : elle ne s'exécutera plus.")
+        store.set_statut(rid, "Suspendu", utilisateur, motif or "Paused")
+        enregistrer(store, f"{rid} paused: it will no longer run.")
         st.rerun()
-    if a3.button("▶️ Remettre en service", width='stretch',
+    if a3.button("▶️ Put back in service", width='stretch',
                  disabled=ctrl["statut"] == "Actif"):
-        store.set_statut(rid, "Actif", utilisateur, motif or "Remise en service")
-        enregistrer(store, f"{rid} remise en service.")
+        store.set_statut(rid, "Actif", utilisateur, motif or "Back in service")
+        enregistrer(store, f"{rid} back in service.")
         st.rerun()
-    if a4.button("🗑️ Supprimer", width='stretch'):
+    if a4.button("🗑️ Delete", width='stretch'):
         st.session_state["suppression"] = rid
         st.rerun()
 
     if st.session_state.get("suppression") == rid:
         st.warning(
-            f"**Supprimer {rid} définitivement ?** La règle quitte le catalogue. "
-            f"Elle reste reconstructible : sa définition complète part au "
-            f"journal, et les packs de preuves déjà produits en gardent une "
-            f"copie intégrale — un run passé reste donc explicable.")
+            f"**Delete {rid} for good?** The rule leaves the catalogue. It stays "
+            f"reconstructible: its full definition goes to the change log, and "
+            f"the evidence packs already produced keep a complete copy — a past "
+            f"run therefore remains explainable.")
         if not motif.strip():
-            st.info("Renseignez le **motif** ci-dessus : il est exigé pour "
-                    "supprimer, et conservé au journal.")
+            st.info("Fill in the **reason** above: it is required to delete, and "
+                    "kept in the change log.")
         s1, s2, _ = st.columns([1, 1, 2])
-        if s1.button("Confirmer la suppression", type="primary",
+        if s1.button("Confirm deletion", type="primary",
                      disabled=not motif.strip(), width='stretch'):
             store.delete_control(rid, utilisateur or "data.steward", motif)
             st.session_state.pop("suppression", None)
-            enregistrer(store, f"{rid} supprimée. Sa définition reste au journal.")
+            enregistrer(store, f"{rid} deleted. Its definition stays in the log.")
             st.rerun()
-        if s2.button("Annuler", width='stretch'):
+        if s2.button("Cancel", width='stretch'):
             st.session_state.pop("suppression", None)
             st.rerun()
 
@@ -882,7 +906,7 @@ def repartir_regles(store: CatalogueStore, profil: list[dict],
             cibles = resolve_targets(c["template"], params, profil)
             raison = applicabilite(c["template"], params, cibles, profil)
         except Exception as exc:  # noqa: BLE001 - un diagnostic ne casse rien
-            raison = f"règle illisible : {exc}"
+            raison = f"unreadable rule: {exc}"
         if raison:
             hors.append((c, raison))
         else:
@@ -892,11 +916,11 @@ def repartir_regles(store: CatalogueStore, profil: list[dict],
 
 def tableau_profil(profil: list[dict]) -> pd.DataFrame:
     return pd.DataFrame({
-        "Colonne": [c["colonne"] for c in profil],
-        "Type déduit": [c["type"] for c in profil],
-        "Vide": [f"{c['taux_nuls_pct']:g} %" for c in profil],
-        "Valeurs distinctes": [c["valeurs_distinctes"] for c in profil],
-        "Sans doublon": ["oui" if c["unique"] else "" for c in profil],
+        "Column": [c["colonne"] for c in profil],
+        "Inferred type": [c["type"] for c in profil],
+        "Empty": [f"{c['taux_nuls_pct']:g} %" for c in profil],
+        "Distinct values": [c["valeurs_distinctes"] for c in profil],
+        "No duplicate": ["yes" if c["unique"] else "" for c in profil],
     })
 
 
@@ -905,28 +929,28 @@ def bloc_suggestions(store: CatalogueStore, utilisateur: str, nom: str,
     """Propose des controles deduits du fichier, chiffres, a accepter ou non."""
     restantes = [p for p in propositions if p["control_name"] not in deja]
     if not restantes:
-        st.success("Tous les contrôles déductibles de ce fichier sont déjà au "
+        st.success("Every control derivable from this file is already in the "
                    "catalogue.")
         return
 
     utiles = [p for p in restantes if (p["impact"] or 0) > 0]
-    st.markdown(f"##### {len(restantes)} contrôle(s) déduits de ce fichier")
+    st.markdown(f"##### {len(restantes)} control(s) derived from this file")
     st.caption(
-        "Ces règles ne viennent d'aucune connaissance métier : elles sortent de "
-        "la distribution observée — colonnes toujours remplies, valeurs "
-        "marginales, bornes aberrantes, ordre des dates. Le brief autorise "
-        "explicitement cette assistance (§14) ; **le verdict reste au moteur, "
-        "la décision reste à vous**."
-        + (f"  \n**{len(utiles)} d'entre elles signaleraient déjà quelque chose "
-           f"sur ce fichier**, et sont pré-cochées." if utiles else ""))
+        "These rules come from no business knowledge: they come out of the "
+        "observed distribution — always-filled columns, marginal values, "
+        "outlying bounds, date ordering. The brief explicitly allows this "
+        "assistance (§14); **the verdict stays with the engine, the decision "
+        "stays with you**."
+        + (f"  \n**{len(utiles)} of them would already flag something on this "
+           f"file**, and are pre-ticked." if utiles else ""))
 
     portee_choix = st.radio(
-        "Portée des règles acceptées", ["tous les fichiers", "ce fichier"],
+        "Scope of the accepted rules", ["every file", "this file"],
         horizontal=True,
-        help="Par défaut une règle vaut pour tout fichier : là où ses colonnes "
-             "n'existent pas, elle est simplement déclarée hors périmètre. "
-             "Restreindre à ce fichier n'est utile que pour limiter le bruit.")
-    scope = "*" if portee_choix == "tous les fichiers" else nom
+        help="By default a rule holds for every file: where its columns do not "
+             "exist, it is simply reported as skipped. Restricting it to this "
+             "file is only useful to limit noise.")
+    scope = "*" if portee_choix == "every file" else nom
 
     retenues: list[dict] = []
     par_dimension: dict[str, list[dict]] = {}
@@ -938,22 +962,22 @@ def bloc_suggestions(store: CatalogueStore, utilisateur: str, nom: str,
         if not groupe:
             continue
         actifs = sum(1 for p in groupe if (p["impact"] or 0) > 0)
-        titre = (f"{DIMENSIONS[dimension]} — {len(groupe)} proposition(s)"
-                 + (f", dont {actifs} avec un écart constaté" if actifs else ""))
+        titre = (f"{DIMENSIONS[dimension]} — {len(groupe)} proposal(s)"
+                 + (f", of which {actifs} already breaching" if actifs else ""))
         with st.expander(titre, expanded=bool(actifs)):
             for p in groupe:
                 impact = p["impact"] or 0
-                marque = (f"🔴 **{nombre(impact)} ligne(s) en écart aujourd'hui**"
-                          if impact else "🟢 aucun écart aujourd'hui")
+                marque = (f"🔴 **{nombre(impact)} row(s) breaching today**"
+                          if impact else "🟢 no breach today")
                 with st.container(border=True):
                     if st.checkbox(f"**{p['control_name']}**", value=impact > 0,
                                    key=f"sug_{nom}_{p['cle']}"):
                         retenues.append(p)
-                    st.caption(f"{marque} · {p['constat']} · gravité "
+                    st.caption(f"{marque} · {p['constat']} · severity "
                                f"{libelle_severite(p['severity']).lower()}")
                     st.caption(p["description"])
 
-    if st.button(f"➕ Ajouter {len(retenues)} contrôle(s) au catalogue",
+    if st.button(f"➕ Add {len(retenues)} control(s) to the catalogue",
                  type="primary", disabled=not retenues, width='stretch'):
         ajoutes, refuses = [], []
         for p in retenues:
@@ -964,133 +988,131 @@ def bloc_suggestions(store: CatalogueStore, utilisateur: str, nom: str,
             candidat["kpi"] = (store.template(p["template"]) or {}).get("kpi_produit", "")
             erreurs = validate_control(candidat, store)
             if erreurs:
-                refuses.append(f"{p['control_name']} : {erreurs[0]}")
+                refuses.append(f"{p['control_name']}: {erreurs[0]}")
                 continue
             store.add_control(
                 candidat, utilisateur or "data.steward",
-                f"Déduite du profil de {nom} — {p['constat']}")
+                f"Derived from the profile of {nom} — {p['constat']}")
             ajoutes.append(candidat["rule_id"])
-        message = (f"{len(ajoutes)} contrôle(s) ajoutés au catalogue "
-                   f"({', '.join(ajoutes)}).") if ajoutes else "Aucun ajout."
+        message = (f"{len(ajoutes)} control(s) added to the catalogue "
+                   f"({', '.join(ajoutes)}).") if ajoutes else "Nothing added."
         if refuses:
-            message += " Refusés par le validateur : " + " ; ".join(refuses)
+            message += " Refused by the validator: " + " ; ".join(refuses)
         enregistrer(store, message)
         st.rerun()
 
 
 def ecran_execution(store: CatalogueStore, utilisateur: str) -> None:
-    bandeau_etape(1, "Déposez un fichier, n'importe lequel. Sa structure est "
-                     "déduite à la lecture, les règles dont les colonnes "
-                     "existent s'appliquent, et le fichier propose lui-même les "
-                     "contrôles qui lui manquent.")
+    bandeau_etape(1, "Drop any file. Its structure is inferred as it is read, "
+                     "the rules whose columns exist are applied, and the file "
+                     "itself proposes the controls it is missing.")
     afficher_flash()
 
-    onglet_depot, onglet_connu = st.tabs(["📎 Déposer un fichier",
-                                          "📂 Choisir un fichier déjà présent"])
+    onglet_depot, onglet_connu = st.tabs(["📎 Drop a file",
+                                          "📂 Pick a file already present"])
     chemin: pathlib.Path | None = None
 
     with onglet_depot:
-        depose = st.file_uploader("Fichier CSV ou Excel", type=["csv", "xlsx", "xls", "xlsm"])
+        depose = st.file_uploader("CSV or Excel file",
+                                  type=["csv", "xlsx", "xls", "xlsm"])
         if depose is not None:
             ENTREES.mkdir(parents=True, exist_ok=True)
             chemin = ENTREES / depose.name
             chemin.write_bytes(depose.getbuffer())
-            st.caption(f"Enregistré dans `data/entrees/{depose.name}`")
+            st.caption(f"Saved to `data/entrees/{depose.name}`")
 
     with onglet_connu:
         connus = fichiers_connus()
         if connus:
             choix = st.selectbox(
-                "Fichier", connus, index=None, placeholder="Choisir un fichier…",
-                format_func=lambda p: f"{p.name}  ({p.stat().st_size / 1e6:.1f} Mo)")
+                "File", connus, index=None, placeholder="Pick a file…",
+                format_func=lambda p: f"{p.name}  ({p.stat().st_size / 1e6:.1f} MB)")
             if choix is not None:
                 chemin = choix
         else:
-            st.info("Aucun fichier dans `data/entrees`, `data/prepared`, "
-                    "`data/ref` ou `data/exemples`.")
+            st.info("No file in `data/entrees`, `data/prepared`, `data/ref` or "
+                    "`data/exemples`.")
 
     if chemin is None:
         st.stop()
 
     try:
-        with st.spinner("Lecture et profilage du fichier…"):
+        with st.spinner("Reading and profiling the file…"):
             df, profil, propositions = lire_fichier(chemin)
     except (ValueError, FileNotFoundError) as exc:
-        st.error(f"Lecture impossible : {exc}")
+        st.error(f"Cannot read the file: {exc}")
         st.stop()
 
     nom = chemin.stem
     applicables, hors = repartir_regles(store, profil, nom)
     st.divider()
 
-    st.markdown(f"##### Ce que le moteur a lu dans `{chemin.name}`")
+    st.markdown(f"##### What the engine read in `{chemin.name}`")
     tuiles([
-        ("Lignes", nombre(len(df)), "#9AAAB8"),
-        ("Colonnes", str(len(profil)), "#9AAAB8"),
-        ("Règles applicables", str(len(applicables)),
+        ("Rows", nombre(len(df)), "#9AAAB8"),
+        ("Columns", str(len(profil)), "#9AAAB8"),
+        ("Applicable rules", str(len(applicables)),
          "#0ca30c" if applicables else "#d03b3b"),
-        ("Hors périmètre", str(len(hors)), "#898781"),
-        ("Contrôles proposés", str(len(propositions)), TEINTE_MAGNITUDE),
+        ("Skipped", str(len(hors)), "#898781"),
+        ("Controls proposed", str(len(propositions)), TEINTE_MAGNITUDE),
     ])
 
-    with st.expander(f"Structure déduite — {len(profil)} colonnes", expanded=False):
+    with st.expander(f"Inferred structure — {len(profil)} columns", expanded=False):
         st.dataframe(tableau_profil(profil), width='stretch', hide_index=True)
         cle = cle_candidate(profil)
         st.caption(
-            f"Identifiant de ligne retenu pour les rapports d'exception : **{cle}**."
+            f"Row identifier used in the exception reports: **{cle}**."
             if cle else
-            "Aucune colonne intégralement unique : les exceptions seront repérées "
-            "par leur position dans le fichier.")
-        st.caption("Personne n'a saisi cette structure. Elle est déduite du "
-                   "contenu et versée aux preuves d'exécution.")
-    with st.expander("Aperçu — 50 premières lignes"):
+            "No fully unique column: exceptions will be located by their "
+            "position in the file.")
+        st.caption("Nobody keyed this structure in. It is inferred from the "
+                   "content and written to the execution evidence.")
+    with st.expander("Preview — first 50 rows"):
         st.dataframe(df.head(50), width='stretch', hide_index=True)
 
     onglet_regles, onglet_sug, onglet_hors = st.tabs(
-        [f"Règles applicables ({len(applicables)})",
-         f"Contrôles proposés par le fichier ({len(propositions)})",
-         f"Hors périmètre ({len(hors)})"])
+        [f"Applicable rules ({len(applicables)})",
+         f"Controls proposed by the file ({len(propositions)})",
+         f"Skipped ({len(hors)})"])
     with onglet_hors:
-        st.caption("Ces règles du catalogue sont actives et couvrent ce fichier "
-                   "par leur portée, mais les colonnes qu'elles visent n'y "
-                   "existent pas. Elles ne sont ni en échec, ni en erreur : "
-                   "elles sont hors sujet, et le moteur le dit.")
+        st.caption("These catalogue rules are active and their scope covers this "
+                   "file, but the columns they target do not exist here. They "
+                   "are neither failed nor in error: they are out of subject, "
+                   "and the engine says so.")
         if hors:
             st.dataframe(pd.DataFrame({
-                "Règle": [c["rule_id"] for c, _ in hors],
-                "Nom": [c["control_name"] for c, _ in hors],
-                "Pourquoi elle ne s'applique pas": [r for _, r in hors],
+                "Rule": [c["rule_id"] for c, _ in hors],
+                "Name": [c["control_name"] for c, _ in hors],
+                "Why it does not apply": [r for _, r in hors],
             }), width='stretch', hide_index=True)
         else:
-            st.success("Toutes les règles du catalogue trouvent leurs colonnes "
-                       "dans ce fichier.")
+            st.success("Every catalogue rule finds its columns in this file.")
     with onglet_regles:
         if applicables:
             st.dataframe(pd.DataFrame({
-                "Règle": [c["rule_id"] for c in applicables],
-                "Nom": [c["control_name"] for c in applicables],
+                "Rule": [c["rule_id"] for c in applicables],
+                "Name": [c["control_name"] for c in applicables],
                 "Dimension": [DIMENSIONS.get(c["control_type"], c["control_type"])
                               for c in applicables],
-                "Ce qui est vérifié": [phrase_controle(c, store) for c in applicables],
-                "Gravité": [libelle_severite(c["severity"]) for c in applicables],
+                "What is checked": [phrase_controle(c, store) for c in applicables],
+                "Severity": [libelle_severite(c["severity"]) for c in applicables],
             }), width='stretch', hide_index=True)
         else:
             st.warning(
-                f"**Aucune règle du catalogue ne trouve ses colonnes dans "
-                f"`{nom}`.** C'est le cas normal d'un fichier jamais rencontré : "
-                f"les règles existantes visent d'autres colonnes. L'onglet "
-                f"*Contrôles proposés* en déduit {len(propositions)} de son "
-                f"seul contenu.")
+                f"**No catalogue rule finds its columns in `{nom}`.** That is "
+                f"the normal case for a file never seen before: the existing "
+                f"rules target other columns. The *Controls proposed* tab "
+                f"derives {len(propositions)} of them from its content alone.")
     with onglet_sug:
         bloc_suggestions(store, utilisateur, nom, propositions,
                          {c["control_name"] for c in store.controls})
 
     st.divider()
-    libelle = st.text_input("Intitulé du contrôle (figure dans le rapport)",
-                            f"Contrôle de {chemin.name}")
-    if st.button("▶️ Lancer le contrôle", type="primary", width='stretch',
+    libelle = st.text_input("Run label (shown in the report)",
+                            f"Control of {chemin.name}")
+    if st.button("▶️ Run the controls", type="primary", width='stretch',
                  disabled=not applicables):
-        with st.spinner("Contrôle en cours…"):
+        with st.spinner("Running the controls…"):
             run = run_dq(chemin, store=store, run_label=libelle)
             classeur = build_workbook(run, store)
         st.session_state["dernier_run"] = run
@@ -1100,58 +1122,56 @@ def ecran_execution(store: CatalogueStore, utilisateur: str) -> None:
     run = st.session_state.get("dernier_run")
     if run is not None and pathlib.Path(run.fichier).stem == nom:
         st.divider()
-        bandeau_resultat(run, store)
-        st.info("Le détail complet — tableau de bord, exceptions ligne à ligne, "
-                "couverture et classeur Excel — est dans l'écran **③ Restitution**.")
+        bandeau_resultat(run)
+        bloc_ecarts(run, store)
+        st.info("The full detail — scorecard, row-level exceptions, coverage "
+                "and Excel workbook — is on screen **③ Reporting**.")
 
 
-def nombre(valeur) -> str:
-    """Un millier se lit avec une espace, jamais avec une virgule."""
-    return f"{int(valeur):,}".replace(",", " ")
+def bandeau_resultat(run) -> None:
+    """Le verdict du run, en grand : feu tricolore et nombre d'echecs.
 
-
-def bandeau_resultat(run, store: CatalogueStore | None = None) -> None:
-    """Le nombre d'echecs d'abord, en grand, puis un bloc replie par ecart.
-
-    Le detail n'est plus une suite de paragraphes empiles : chaque controle en
-    ecart est une carte fermee, qui ne s'ouvre que pour etre instruite. On lit
-    d'abord combien, ensuite lesquels, et seulement si on le demande, pourquoi.
+    Le statut global suit les regles du moteur (`dq_engine.statut_global`) :
+    une erreur technique ou un echec bloquant met le run au rouge, un echec
+    mineur ou un controle hors perimetre a l'orange, le reste au vert.
     """
     s = run.summary()
-    echecs, erreurs = s["fail"], s["erreur"]
+    echecs, erreurs = s["fail"], s["error"]
     sc = run.scorecard
     bloquants = int(((sc["statut"] == "FAIL") & (sc["severity"].isin(
         ["Critical", "High"]))).sum()) if not sc.empty else 0
 
+    rag = s.get("rag", "GREEN")
+    puce, couleur, fond, bordure = RAG_VUE.get(rag, RAG_VUE["GREEN"])
+
     if echecs or erreurs:
-        couleur, fond, bordure = "#FF6B6B", "#20090A", "#5C2226"
-        titre = f"{echecs} contrôle{'s' if echecs > 1 else ''} en échec"
+        titre = f"{echecs} control{'s' if echecs > 1 else ''} in breach"
         if erreurs:
-            titre += f" · {erreurs} en erreur technique"
-        sous = (f"dont {bloquants} de gravité Bloquant ou Important — "
-                f"{nombre(s['exceptions'])} ligne(s) à instruire" if bloquants else
-                f"{nombre(s['exceptions'])} ligne(s) à instruire")
+            titre += f" · {erreurs} technical error{'s' if erreurs > 1 else ''}"
+        sous = (f"of which {bloquants} rated Blocking or Major — "
+                f"{nombre(s['exceptions'])} row(s) to review" if bloquants else
+                f"{nombre(s['exceptions'])} row(s) to review")
     else:
-        couleur, fond, bordure = "#3FD37A", "#071A0F", "#1E5233"
-        titre = "Aucun contrôle en échec"
-        sous = f"{s['pass']} contrôle(s) passés sans écart"
+        titre = "No control in breach"
+        sous = (f"{s['pass']} control(s) passed"
+                + (f" · {s['skipped']} skipped, hence AMBER"
+                   if s["skipped"] else ""))
 
     st.markdown(
         f"""<div style="background:linear-gradient(135deg,{fond},{FOND_CREUX} 70%);
         border:1px solid {bordure};border-left:5px solid {couleur};
         border-radius:14px;padding:24px 28px;margin:6px 0 18px 0;">
+        <div style="font-size:11px;letter-spacing:.16em;font-weight:700;
+        color:{couleur};">{puce} OVERALL STATUS · {rag}</div>
         <div style="font-size:44px;font-weight:700;color:{couleur};
-        line-height:1.05;letter-spacing:-.02em;">{titre}</div>
+        line-height:1.05;letter-spacing:-.02em;margin-top:4px;">{titre}</div>
         <div style="font-size:15px;color:{TEXTE_SOURDINE};margin-top:8px;">
         {sous}</div></div>""",
         unsafe_allow_html=True)
 
-    if echecs or erreurs:
-        bloc_ecarts(run, store)
-
 
 # Teinte par gravite. Elle n'est jamais seule a porter le sens : le libelle
-# metier - Bloquant, Important, Moyen, Mineur - l'accompagne partout.
+# metier - Blocking, Major, Moderate, Minor - l'accompagne partout.
 TEINTE_GRAVITE = {"Critical": "#FF5C5C", "High": "#FF9A52",
                   "Medium": "#F2C14E", "Low": "#8FA3B8"}
 
@@ -1159,7 +1179,9 @@ TEINTE_GRAVITE = {"Critical": "#FF5C5C", "High": "#FF9A52",
 def bloc_ecarts(run, store: CatalogueStore | None = None) -> None:
     """Un bloc depliable par controle en ecart, du plus grave au plus volumineux."""
     sc = run.scorecard
-    incidents = sc[sc["statut"].isin(["FAIL", "ERREUR"])].copy()
+    if sc.empty:
+        return
+    incidents = sc[sc["statut"].isin(["FAIL", "ERROR"])].copy()
     if incidents.empty:
         return
     rang = {s: i for i, s in enumerate(SEVERITES)}
@@ -1167,10 +1189,10 @@ def bloc_ecarts(run, store: CatalogueStore | None = None) -> None:
     incidents = incidents.sort_values(["_rang", "lignes_ko"],
                                       ascending=[True, False])
 
-    st.markdown(f"##### {len(incidents)} contrôle(s) à instruire")
-    st.caption("Du plus grave au plus volumineux. Chaque ligne se déplie sur "
-               "son détail : ce qui était vérifié, où, sur combien de lignes, "
-               "et l'action attendue.")
+    st.markdown(f"##### {len(incidents)} control(s) to review")
+    st.caption("Most severe first, then by volume. Each line unfolds on its "
+               "detail: what was checked, where, on how many rows, and the "
+               "action expected.")
     for _, r in incidents.iterrows():
         with st.expander(entete_ecart(r), expanded=False):
             detail_ecart(run, r, store)
@@ -1178,61 +1200,61 @@ def bloc_ecarts(run, store: CatalogueStore | None = None) -> None:
 
 def entete_ecart(r) -> str:
     """Le titre replie doit suffire a decider si on ouvre : quoi, combien, gravite."""
-    if r["statut"] == "ERREUR":
-        return (f"🟠  {r['rule_id']} · {r['control_name']} — erreur technique, "
-                f"aucun verdict rendu")
+    if r["statut"] == "ERROR":
+        return (f"🟠  {r['rule_id']} · {r['control_name']} — technical error, "
+                f"no verdict issued")
     cible = "" if str(r["cible"]) in ("-", "", "nan") else f" · {r['cible']}"
     return (f"🔴  {r['rule_id']} · {r['control_name']}{cible} — "
-            f"{nombre(r['lignes_ko'])} ligne(s) en écart sur "
+            f"{nombre(r['lignes_ko'])} row(s) in breach out of "
             f"{nombre(r['lignes_testees'])} · {libelle_severite(r['severity'])}")
 
 
 def detail_ecart(run, r, store: CatalogueStore | None) -> None:
     """Le contenu d'un bloc deplie : le fait, le contexte, puis l'action."""
-    if r["statut"] == "ERREUR":
-        st.warning("La règle n'a pas pu s'exécuter sur ce fichier. Ce n'est ni "
-                   "un échec, ni un succès : aucun verdict n'est rendu, et le "
-                   "message technique ci-dessous part au journal d'exécution.")
+    if r["statut"] == "ERROR":
+        st.warning("The rule could not run on this file. This is neither a "
+                   "failure nor a pass: no verdict is issued, and the technical "
+                   "message below goes to the execution log.")
         st.code(r["message"] or "—", language="text")
     else:
         taux = float(r["taux_ko_pct"] or 0)
         seuil = float(r["seuil_pct"] or 0)
         fiche([
             ("Dimension", DIMENSIONS.get(r["dimension"], r["dimension"])),
-            ("Colonne testée",
+            ("Column tested",
              f"<code style='font-size:13px;'>{r['cible']}</code>"),
-            ("Lignes en écart", f"{nombre(r['lignes_ko'])} sur "
-                                f"{nombre(r['lignes_testees'])}"),
-            ("Part des lignes", f"{taux:g} % · toléré {seuil:g} %"),
-            ("Indicateur", f"{r['kpi_nom']} : {r['kpi_valeur']}"),
-            ("Gravité", libelle_severite(r["severity"])),
+            ("Rows in breach", f"{nombre(r['lignes_ko'])} of "
+                               f"{nombre(r['lignes_testees'])}"),
+            ("Share of rows", f"{taux:g} % · tolerated {seuil:g} %"),
+            ("KPI", f"{r['kpi_nom']}: {r['kpi_valeur']}"),
+            ("Severity", libelle_severite(r["severity"])),
         ])
 
     controle = store.control(r["rule_id"]) if store is not None else None
     if controle:
-        st.markdown(f"**Ce qui était vérifié** — {phrase_controle(controle, store)}")
+        st.markdown(f"**What was checked** — {phrase_controle(controle, store)}")
         if controle.get("description"):
             st.caption(controle["description"])
 
     couleur = TEINTE_GRAVITE.get(r["severity"], "#8FA3B8")
-    action = r["remediation_action"] or "Aucune action de remédiation définie."
+    action = r["remediation_action"] or "No remediation action defined."
     st.markdown(
         f"""<div style="background:{FOND_CREUX};border:1px solid {BORDURE};
         border-left:3px solid {couleur};border-radius:8px;padding:12px 16px;
         margin:6px 0 4px 0;">
         <span style="font-size:10.5px;letter-spacing:.1em;font-weight:700;
-        color:{couleur};">ACTION ATTENDUE</span>
+        color:{couleur};">ACTION EXPECTED</span>
         <div style="font-size:14.5px;margin-top:4px;">{action}</div>
         <div style="font-size:12.5px;color:{TEXTE_SOURDINE};margin-top:6px;">
-        Responsable : {r['owner'] or '—'} · fréquence de contrôle :
-        {str(r['frequency'] or '—').lower()} · version {r['version']} de la
-        règle</div></div>""",
+        Owner: {r['owner'] or '—'} · control frequency:
+        {str(r['frequency'] or '—').lower()} · rule version {r['version']}</div>
+        </div>""",
         unsafe_allow_html=True)
 
     apercu = lignes_en_ecart(run, r)
     if apercu is not None:
-        st.caption("Les premières lignes concernées — le rapport complet est "
-                   "dans l'onglet **Exceptions ligne à ligne**.")
+        st.caption("The first rows concerned — the full report is in the "
+                   "**Row-level exceptions** tab.")
         st.dataframe(apercu, width='stretch', hide_index=True)
 
 
@@ -1258,17 +1280,17 @@ def lignes_en_ecart(run, r, limite: int = 10) -> pd.DataFrame | None:
                 if c in vue.columns]
     apercu = vue[colonnes].head(limite).copy()
     if "valeur" in apercu.columns:
-        # Une valeur absente s'ecrit « (vide) » : `nan` est un mot de Python,
+        # Une valeur absente s'ecrit « (empty) » : `nan` est un mot de Python,
         # pas une explication.
         apercu["valeur"] = apercu["valeur"].astype(str).replace(
-            {"nan": "(vide)", "None": "(vide)", "": "(vide)", "NaT": "(vide)"})
+            {"nan": "(empty)", "None": "(empty)", "": "(empty)", "NaT": "(empty)"})
     return apercu.rename(columns={
-        "identifiant_ligne": "Ligne", "colonne": "Colonne",
-        "valeur": "Valeur lue", "motif": "Pourquoi elle est en écart"})
+        "identifiant_ligne": "Row", "colonne": "Column",
+        "valeur": "Value read", "motif": "Why it breaches"})
 
 
 # --------------------------------------------------------------------------- #
-# ③ Restitution - REPORTS
+# ③ Reporting - REPORTS
 # --------------------------------------------------------------------------- #
 def graphe_statuts_par_dimension(sc: pd.DataFrame):
     """Part-a-tout par dimension : ou le controle tient, ou il lache."""
@@ -1277,22 +1299,24 @@ def graphe_statuts_par_dimension(sc: pd.DataFrame):
         for dimension, libelle in DIMENSIONS.items():
             n = int(((sc["dimension"] == dimension) & (sc["statut"] == code)).sum())
             if n:
-                lignes.append({"Dimension": libelle, "Statut": f"{puce} {nom}",
-                               "Contrôles": n, "ordre": rang})
+                lignes.append({"Dimension": libelle, "Status": f"{puce} {nom}",
+                               "Controls": n, "ordre": rang})
     if not lignes:
         return None
     domaine = [f"{puce} {nom}" for _, nom, puce, _ in STATUTS_VUE]
     couleurs = [teinte for _, _, _, teinte in STATUTS_VUE]
-    return alt.Chart(pd.DataFrame(lignes)).mark_bar(height=22).encode(
-        y=alt.Y("Dimension:N", title=None,
-                sort=[v for v in DIMENSIONS.values()]),
-        x=alt.X("Contrôles:Q", title="Contrôles exécutés",
+    return alt.Chart(pd.DataFrame(lignes)).mark_bar(height=18).encode(
+        # `labelOverlap=False` : sans cela Vega n'affiche qu'une etiquette sur
+        # deux des que la colonne se resserre, et une dimension disparait.
+        y=alt.Y("Dimension:N", title=None, sort=list(DIMENSIONS.values()),
+                axis=alt.Axis(labelOverlap=False, labelLimit=140)),
+        x=alt.X("Controls:Q", title="Controls executed",
                 axis=alt.Axis(tickMinStep=1)),
-        color=alt.Color("Statut:N",
+        color=alt.Color("Status:N",
                         scale=alt.Scale(domain=domaine, range=couleurs),
                         legend=alt.Legend(title=None, orient="bottom", columns=2)),
         order=alt.Order("ordre:Q", sort="ascending"),
-        tooltip=["Dimension", "Statut", "Contrôles"],
+        tooltip=["Dimension", "Status", "Controls"],
     ).properties(height=max(150, 34 * len(set(x["Dimension"] for x in lignes))))
 
 
@@ -1301,14 +1325,14 @@ def graphe_ecarts_par_regle(sc: pd.DataFrame):
     ko = sc[sc["lignes_ko"] > 0].nlargest(8, "lignes_ko").copy()
     if ko.empty:
         return None
-    ko["Règle"] = ko["rule_id"] + " · " + ko["control_name"].str.slice(0, 30)
-    ko["Lignes"] = ko["lignes_ko"]
+    ko["Rule"] = ko["rule_id"] + " · " + ko["control_name"].str.slice(0, 30)
+    ko["Rows"] = ko["lignes_ko"]
     base = alt.Chart(ko).encode(
-        y=alt.Y("Règle:N", sort="-x", title=None),
-        x=alt.X("Lignes:Q", title="Lignes en écart"))
+        y=alt.Y("Rule:N", sort="-x", title=None),
+        x=alt.X("Rows:Q", title="Rows in breach"))
     barres = base.mark_bar(height=20, color=TEINTE_MAGNITUDE, cornerRadiusEnd=4)
     etiquettes = base.mark_text(align="left", dx=6, fontSize=12).encode(
-        text=alt.Text("Lignes:Q", format=","))
+        text=alt.Text("Rows:Q", format=","))
     return (barres + etiquettes).properties(height=max(150, 34 * len(ko)))
 
 
@@ -1329,10 +1353,11 @@ def historique_du_fichier(nom_fichier: str) -> pd.DataFrame:
         except (json.JSONDecodeError, OSError):
             continue
         points.append({
-            "Exécution": manifeste.get("horodatage", "")[:16].replace("T", " "),
-            "Contrôles en échec": sum(1 for r in resultats if r["statut"] == "FAIL"),
-            "Lignes en écart": sum(int(r.get("lignes_ko", 0)) for r in resultats),
-            "Run": pack.name,
+            "Run": manifeste.get("horodatage", "")[:16].replace("T", " "),
+            "Controls in breach": sum(1 for r in resultats if r["statut"] == "FAIL"),
+            "Rows in breach": sum(int(r.get("lignes_ko", 0)) for r in resultats),
+            "Status": manifeste.get("statut_global", ""),
+            "Run ID": pack.name,
         })
     return pd.DataFrame(points)
 
@@ -1340,134 +1365,140 @@ def historique_du_fichier(nom_fichier: str) -> pd.DataFrame:
 def graphe_historique(points: pd.DataFrame):
     """Evolution : une seule serie, donc aucune legende - le titre la nomme."""
     base = alt.Chart(points).encode(
-        x=alt.X("Exécution:N", title=None, axis=alt.Axis(labelAngle=-30)),
-        y=alt.Y("Contrôles en échec:Q", title="Contrôles en échec",
+        x=alt.X("Run:N", title=None, axis=alt.Axis(labelAngle=-30)),
+        y=alt.Y("Controls in breach:Q", title="Controls in breach",
                 axis=alt.Axis(tickMinStep=1)),
-        tooltip=["Exécution", "Contrôles en échec", "Lignes en écart", "Run"])
+        tooltip=["Run", "Controls in breach", "Rows in breach", "Status", "Run ID"])
     return (base.mark_line(color=TEINTE_MAGNITUDE, strokeWidth=2)
             + base.mark_point(color=TEINTE_MAGNITUDE, size=90, filled=True)
             ).properties(height=260)
 
 
-
 def ecran_restitution(store: CatalogueStore) -> None:
-    bandeau_etape(2, "Tableau de bord à feux tricolores, rapport d'exceptions "
-                     "ligne à ligne, vue de couverture des contrôles.")
+    bandeau_etape(2, "Traffic-light scorecard, row-level exception report, "
+                     "control coverage view.")
 
     run = st.session_state.get("dernier_run")
     if run is None:
-        st.info("Aucun contrôle n'a encore été lancé dans cette session. "
-                "Rendez-vous dans l'écran **② Exécution**.")
+        st.info("No control has been run in this session yet. Go to screen "
+                "**② Execution**.")
         return
 
     sc = run.scorecard.copy()
     s_res = run.summary()
     nom_fichier = pathlib.Path(run.fichier).stem
-    executes = s_res["pass"] + s_res["fail"] + s_res["erreur"]
+    executes = s_res["pass"] + s_res["fail"] + s_res["error"]
     conformite = (100.0 * s_res["pass"] / executes) if executes else 0.0
 
     st.caption(f"**{pathlib.Path(run.fichier).name}** · run `{run.run_id}` · "
                f"{run.horodatage.replace('T', ' ')}")
-    bandeau_resultat(run, store)
+    bandeau_resultat(run)
 
-    st.markdown("##### Le run en six chiffres")
+    # Les chiffres du run viennent AVANT le detail des ecarts : on lit d'abord
+    # la mesure, ensuite les cas a instruire.
+    st.markdown("##### The run in six figures")
     tuiles([
-        ("Contrôles exécutés", str(s_res["controles"]), "#9AAAB8"),
-        ("Sans écart", str(s_res["pass"]), "#0ca30c"),
-        ("En échec", str(s_res["fail"]),
+        ("Controls executed", str(s_res["controls"]), "#9AAAB8"),
+        ("Passed", str(s_res["pass"]), "#0ca30c"),
+        ("In breach", str(s_res["fail"]),
          "#d03b3b" if s_res["fail"] else "#0ca30c"),
-        ("Hors périmètre", str(s_res["non_applicable"]), "#898781"),
-        ("Conformité", f"{conformite:.0f} %",
+        ("Skipped", str(s_res["skipped"]), "#898781"),
+        ("Compliance", f"{conformite:.0f} %",
          "#0ca30c" if conformite == 100 else TEINTE_MAGNITUDE),
-        ("Lignes en exception", nombre(s_res["exceptions"]),
+        ("Exception rows", nombre(s_res["exceptions"]),
          "#d03b3b" if s_res["exceptions"] else "#0ca30c"),
     ])
 
     classeur = st.session_state.get("dernier_classeur")
     if classeur and pathlib.Path(classeur).exists():
         st.download_button(
-            "⬇️ Télécharger le rapport Excel (6 onglets)", type="primary",
+            "⬇️ Download the Excel report (6 sheets)", type="primary",
             data=pathlib.Path(classeur).read_bytes(),
             file_name=pathlib.Path(classeur).name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # --- les deux graphiques de tête ---------------------------------------
+    st.divider()
+    bloc_ecarts(run, store)
+
+    # --- les deux graphiques ------------------------------------------------
+    st.divider()
     g, d = st.columns(2)
     with g:
-        st.markdown("##### Statut des contrôles, par dimension")
+        st.markdown("##### Control status, by dimension")
         graphe = graphe_statuts_par_dimension(sc)
         if graphe is None:
-            st.info("Aucun contrôle exécuté.")
+            st.info("No control executed.")
         else:
             st.altair_chart(graphe, width='stretch')
-            st.caption("Les six dimensions du brief. Une dimension absente n'a "
-                       "aucune règle applicable à ce fichier.")
+            st.caption("The six dimensions of the brief. A missing dimension "
+                       "has no rule applicable to this file.")
     with d:
-        st.markdown("##### Lignes en écart, par règle")
+        st.markdown("##### Rows in breach, by rule")
         graphe = graphe_ecarts_par_regle(sc)
         if graphe is None:
-            st.success("Aucune ligne en écart sur ce run.")
+            st.success("No row in breach on this run.")
         else:
             st.altair_chart(graphe, width='stretch')
-            st.caption("Les huit règles qui remontent le plus de lignes à "
-                       "instruire.")
+            st.caption("The eight rules raising the most rows to review.")
 
     t1, t2, t3, t4, t5 = st.tabs([
-        "Détail des contrôles", "Exceptions ligne à ligne",
-        "Couverture des contrôles", "Historique du fichier", "Règles refusées"])
+        "Control detail", "Row-level exceptions", "Control coverage",
+        "File history", "Rejected rules"])
 
     with t1:
-        horsp = int((sc["statut"] == "NON_APPLICABLE").sum())
+        horsp = int((sc["statut"] == "SKIPPED").sum())
         vue = sc
         if horsp and not st.checkbox(
-                f"Afficher aussi les {horsp} règle(s) hors périmètre",
-                help="Règles actives dont les colonnes n'existent pas dans ce "
-                     "fichier. Le détail figure dans l'onglet Couverture."):
-            vue = sc[sc["statut"] != "NON_APPLICABLE"]
+                f"Also show the {horsp} skipped rule(s)",
+                help="Active rules whose columns do not exist in this file. The "
+                     "detail is in the Coverage tab."):
+            vue = sc[sc["statut"] != "SKIPPED"]
         tableau = pd.DataFrame({
             "": vue["statut"].map(PUCE_RUN),
-            "Règle": vue["rule_id"],
-            "Contrôle": vue["control_name"],
+            "Rule": vue["rule_id"],
+            "Control": vue["control_name"],
             "Dimension": vue["dimension"].map(lambda x: DIMENSIONS.get(x, x)),
-            "Ce qui est vérifié": [
+            "What is checked": [
                 phrase_controle(store.control(r) or {}, store) for r in vue["rule_id"]],
-            "Colonne testée": vue["cible"],
-            "Gravité": vue["severity"].map(libelle_severite),
-            "Lignes en écart": vue["lignes_ko"],
-            "Lignes testées": vue["lignes_testees"],
-            "Indicateur": vue["kpi_nom"] + " : " + vue["kpi_valeur"].astype(str),
-            "Responsable": vue["owner"],
-            "Commentaire": vue["message"],
+            "Column tested": vue["cible"],
+            "Severity": vue["severity"].map(libelle_severite),
+            "Rows in breach": vue["lignes_ko"],
+            "Rows tested": vue["lignes_testees"],
+            "KPI": vue["kpi_nom"] + ": " + vue["kpi_valeur"].astype(str),
+            "Owner": vue["owner"],
+            "Explanation": vue["message"],
         })
         st.dataframe(tableau, width='stretch', hide_index=True)
-        st.caption("🟢 sans écart · 🔴 en échec · 🟠 erreur technique · "
-                   "⚪ hors périmètre (motif en commentaire)")
+        st.caption("🟢 passed · 🔴 in breach · 🟠 technical error · "
+                   "⚪ skipped (reason in the explanation)")
         st.download_button(
-            "⬇️ Exporter le tableau de bord (CSV)",
+            "⬇️ Export the scorecard (CSV)",
             data=tableau.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"scorecard_{run.run_id}.csv", mime="text/csv")
 
     with t2:
         exceptions = run.exceptions
         if exceptions.empty:
-            st.success("Aucune ligne en exception sur ce run.")
+            st.success("No exception row on this run.")
         else:
             f1, f2 = st.columns(2)
-            regles = ["(toutes)"] + sorted(exceptions["rule_id"].unique())
-            choix = f1.selectbox("Règle", regles)
-            gravites = ["(toutes)"] + [g for g in SEVERITES
-                                       if g in set(exceptions["severity"])]
-            grav = f2.selectbox("Gravité", gravites, format_func=libelle_severite)
+            regles = ["(all)"] + sorted(exceptions["rule_id"].unique())
+            choix = f1.selectbox("Rule", regles)
+            gravites = ["(all)"] + [g for g in SEVERITES
+                                    if g in set(exceptions["severity"])]
+            grav = f2.selectbox("Severity", gravites,
+                                format_func=lambda g: g if g == "(all)"
+                                else libelle_severite(g))
             vue = exceptions
-            if choix != "(toutes)":
+            if choix != "(all)":
                 vue = vue[vue["rule_id"] == choix]
-            if grav != "(toutes)":
+            if grav != "(all)":
                 vue = vue[vue["severity"] == grav]
             st.dataframe(vue.head(2000), width='stretch', hide_index=True)
-            st.caption(f"{len(vue):,} exception(s) — 2 000 premières affichées."
-                       .replace(",", " "))
+            st.caption(f"{nombre(len(vue))} exception(s) — first 2 000 shown. "
+                       f"The evidence pack keeps them all, untruncated.")
             st.download_button(
-                "⬇️ Exporter ces exceptions (CSV)",
+                "⬇️ Export these exceptions (CSV)",
                 data=vue.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"exceptions_{run.run_id}.csv", mime="text/csv")
 
@@ -1475,63 +1506,63 @@ def ecran_restitution(store: CatalogueStore) -> None:
         executees = set(sc["dimension"]) if not sc.empty else set()
         st.dataframe(pd.DataFrame([
             {"Dimension": libelle,
-             "Contrôles exécutés": int((sc["dimension"] == d).sum())
+             "Controls executed": int((sc["dimension"] == d).sum())
              if not sc.empty else 0,
-             "Couverte sur ce fichier": "oui" if d in executees else "non"}
+             "Covered on this file": "yes" if d in executees else "no"}
             for d, libelle in DIMENSIONS.items()]),
             width='stretch', hide_index=True)
 
         vues = set(sc["rule_id"]) if not sc.empty else set()
         hors = [c for c in store.active_controls() if c["rule_id"] not in vues]
         if hors:
-            st.markdown("**Règles actives hors portée de ce fichier**")
+            st.markdown("**Active rules out of scope for this file**")
             st.dataframe(pd.DataFrame({
-                "Règle": [c["rule_id"] for c in hors],
-                "Nom": [c["control_name"] for c in hors],
-                "Portée": [c["dataset_scope"] for c in hors],
+                "Rule": [c["rule_id"] for c in hors],
+                "Name": [c["control_name"] for c in hors],
+                "Scope": [c["dataset_scope"] for c in hors],
             }), width='stretch', hide_index=True)
-        na = sc[sc["statut"] == "NON_APPLICABLE"] if not sc.empty else pd.DataFrame()
+        na = sc[sc["statut"] == "SKIPPED"] if not sc.empty else pd.DataFrame()
         if not na.empty:
-            st.markdown("**Règles dans la portée mais non applicables**")
+            st.markdown("**Rules in scope but not applicable**")
             st.dataframe(pd.DataFrame({
-                "Règle": na["rule_id"], "Nom": na["control_name"],
-                "Motif": na["message"],
+                "Rule": na["rule_id"], "Name": na["control_name"],
+                "Reason": na["message"],
             }), width='stretch', hide_index=True)
 
     with t4:
         points = historique_du_fichier(nom_fichier)
         if len(points) < 2:
-            st.info(f"Un seul contrôle de `{nom_fichier}` a laissé des preuves. "
-                    f"L'historique se construit d'une exécution à l'autre — "
-                    f"relancez le contrôle pour voir la courbe.")
+            st.info(f"Only one control run of `{nom_fichier}` has left evidence. "
+                    f"The history builds up from one run to the next — run the "
+                    f"controls again to see the curve.")
             if not points.empty:
                 st.dataframe(points, width='stretch', hide_index=True)
         else:
             st.altair_chart(graphe_historique(points), width='stretch')
-            st.caption(f"Lu dans les packs de preuves de `{nom_fichier}`. "
-                       f"Aucune base tenue à côté : c'est la couche d'audit qui "
-                       f"porte l'historique.")
+            st.caption(f"Read from the evidence packs of `{nom_fichier}`. No "
+                       f"database is kept on the side: the audit layer carries "
+                       f"the history.")
             st.dataframe(points, width='stretch', hide_index=True)
             st.download_button(
-                "⬇️ Exporter l'historique (CSV)",
+                "⬇️ Export the history (CSV)",
                 data=points.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"historique_{nom_fichier}.csv", mime="text/csv")
+                file_name=f"history_{nom_fichier}.csv", mime="text/csv")
 
     with t5:
         rejets = pd.DataFrame(run.rejets)
         if rejets.empty:
-            st.success("Aucune règle refusée : toutes les définitions sont saines.")
+            st.success("No rule rejected: every definition is sound.")
         else:
             st.dataframe(rejets.rename(columns={
-                "rule_id": "Règle", "control_name": "Nom",
-                "dataset": "Fichier", "motif": "Pourquoi elle est refusée"}),
+                "rule_id": "Rule", "control_name": "Name",
+                "dataset": "File", "motif": "Why it was rejected"}),
                 width='stretch', hide_index=True)
-        st.caption("Règles écartées par le validateur avant exécution : "
-                   "une règle mal définie ne fait jamais échouer un contrôle.")
+        st.caption("Rules discarded by the validator before execution: a "
+                   "malformed rule never makes a control fail.")
 
 
 # --------------------------------------------------------------------------- #
-# ④ Piste d'audit - EVIDENCES
+# ④ Audit trail - EVIDENCES
 # --------------------------------------------------------------------------- #
 def packs_de_preuve() -> list[pathlib.Path]:
     if not EVIDENCE_DIR.exists():
@@ -1541,88 +1572,299 @@ def packs_de_preuve() -> list[pathlib.Path]:
                   key=lambda p: p.name, reverse=True)
 
 
+def lire_piece(pack: pathlib.Path, nom: str, defaut=None):
+    """Lit une piece JSON du pack sans jamais lever : un pack peut etre partiel."""
+    try:
+        return json.loads((pack / nom).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaut
+
+
+def zip_du_pack(pack: pathlib.Path) -> bytes:
+    """Assemble le pack complet en un ZIP telechargeable."""
+    tampon = io.BytesIO()
+    with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
+        for fichier in sorted(pack.iterdir()):
+            if fichier.is_file():
+                archive.write(fichier, arcname=f"{pack.name}/{fichier.name}")
+    return tampon.getvalue()
+
+
+def badge_rag(statut: str) -> str:
+    puce, couleur, fond, bordure = RAG_VUE.get(statut, RAG_VUE["GREEN"])
+    return (f"""<span style="background:{fond};border:1px solid {bordure};
+            color:{couleur};border-radius:999px;padding:4px 12px;font-weight:700;
+            font-size:12px;letter-spacing:.1em;">{puce} {statut}</span>""")
+
+
+def onglet_pack(pack: pathlib.Path, utilisateur: str) -> None:
+    """Tout ce qu'un auditeur doit pouvoir faire sur un run, sans le moteur."""
+    manifeste = lire_piece(pack, "manifest.json", {}) or {}
+    resume = lire_piece(pack, "summary.json", {}) or {}
+    totaux = resume.get("totaux", {})
+
+    entete, telecharger = st.columns([3, 1])
+    with entete:
+        st.markdown(
+            f"""<div style="display:flex;align-items:center;gap:14px;
+            flex-wrap:wrap;margin-bottom:6px;">
+            {badge_rag(manifeste.get('statut_global', 'GREEN'))}
+            <span style="font-size:20px;font-weight:700;">
+            {manifeste.get('fichier_nom', '—')}</span>
+            <span style="color:{TEXTE_SOURDINE};font-size:13px;">
+            run <code>{manifeste.get('run_id', pack.name)}</code> ·
+            {str(manifeste.get('horodatage', '')).replace('T', ' ')} ·
+            as-of {manifeste.get('as_of', '—')} ·
+            engine {manifeste.get('moteur_version', '—')}</span></div>""",
+            unsafe_allow_html=True)
+    with telecharger:
+        st.download_button("⬇️ Evidence pack (ZIP)", data=zip_du_pack(pack),
+                           file_name=f"{pack.name}.zip", mime="application/zip",
+                           width='stretch', type="primary",
+                           key=f"zip_{pack.name}")
+
+    tuiles([
+        ("Controls", str(totaux.get("controls", "—")), "#9AAAB8"),
+        ("In breach", str(totaux.get("fail", "—")),
+         "#d03b3b" if totaux.get("fail") else "#0ca30c"),
+        ("Errors", str(totaux.get("error", "—")),
+         "#fab219" if totaux.get("error") else "#0ca30c"),
+        ("Skipped", str(totaux.get("skipped", "—")), "#898781"),
+        ("Exception rows", nombre(totaux.get("exceptions", 0)),
+         "#d03b3b" if totaux.get("exceptions") else "#0ca30c"),
+        ("Rules frozen", str(manifeste.get("regles_executees", "—")),
+         TEINTE_MAGNITUDE),
+    ])
+
+    o_pieces, o_verif, o_rejeu, o_trace, o_signoff = st.tabs(
+        ["Pack contents", "Integrity check", "Replay", "Traceability",
+         "Sign-off"])
+
+    # --- 1. Les pieces exigees par l'annexe B.2 ----------------------------
+    with o_pieces:
+        g, d = st.columns([3, 2])
+        with g:
+            st.markdown("##### The ten components required by the brief (B.2)")
+            st.dataframe(pd.DataFrame([
+                {"": "🟢" if (pack / fichier).exists() else "⚪",
+                 "Required component": piece, "File": fichier,
+                 "Content": contenu}
+                for piece, fichier, contenu in PIECES_AUDIT]),
+                width='stretch', hide_index=True)
+            st.caption("⚪ *Sign-off Fields* is marked optional by the brief; it "
+                       "is filled in the Sign-off tab.")
+            st.markdown("##### Additional pieces, for independent verification")
+            st.dataframe(pd.DataFrame([
+                {"": "🟢" if (pack / fichier).exists() else "⚪",
+                 "Piece": piece, "File": fichier, "Content": contenu}
+                for piece, fichier, contenu in PIECES_COMPLEMENT]),
+                width='stretch', hide_index=True)
+        with d:
+            st.markdown("##### Input dataset references")
+            sources = manifeste.get("sources", {})
+            st.dataframe(pd.DataFrame([
+                {"Source": k, "SHA-256": str(v.get("sha256", ""))[:16] + "…",
+                 "Rows": v.get("lignes", "")}
+                for k, v in sources.items()]), width='stretch', hide_index=True)
+            st.metric("Catalogue fingerprint",
+                      str(manifeste.get("catalogue_sha256", ""))[:16] + "…")
+            st.metric("Executed rules fingerprint",
+                      str(manifeste.get("regles_executees_sha256", ""))[:16] + "…")
+            st.caption("Exceptions complete: "
+                       + ("yes, nothing truncated"
+                          if manifeste.get("exceptions_completes", True)
+                          else "**no** — "
+                               + ", ".join(manifeste.get(
+                                   "exceptions_tronquees_pour", []))))
+
+        with st.expander("Full manifest"):
+            st.json(manifeste)
+        if manifeste.get("profil_fichier"):
+            with st.expander("Structure inferred at run time"):
+                st.dataframe(tableau_profil(manifeste.get("profil_fichier", [])),
+                             width='stretch', hide_index=True)
+        with st.expander("Execution log"):
+            try:
+                st.code((pack / "execution.log").read_text(encoding="utf-8"),
+                        language="text")
+            except OSError:
+                st.info("No log in this pack.")
+
+    # --- 2. Verification d'integrite --------------------------------------
+    with o_verif:
+        st.caption("Seven checks an auditor would run: are the pieces there, "
+                   "have they been altered since, is the controlled file still "
+                   "the one that was read, do the frozen rules match the ones "
+                   "that ran, and do the results agree with the exceptions "
+                   "delivered.")
+        if st.button("🔍 Verify this evidence pack", type="primary",
+                     key=f"verif_{pack.name}"):
+            with st.spinner("Recomputing the fingerprints…"):
+                st.session_state[f"rapport_verif_{pack.name}"] = verifier_pack(pack)
+        rapport = st.session_state.get(f"rapport_verif_{pack.name}")
+        if rapport:
+            conforme = rapport["verdict"] == "VERIFIED"
+            (st.success if conforme else st.error)(
+                "**Pack verified — no discrepancy.** The run can be "
+                "reconstructed from these files alone." if conforme else
+                "**Discrepancies found.** See the failed checks below.")
+            st.dataframe(pd.DataFrame([
+                {"": {"OK": "🟢", "GAP": "🔴"}.get(c["statut"], "⚪"),
+                 "Check": c["controle"], "Result": c["statut"],
+                 "Detail": c["detail"]}
+                for c in rapport["controles"]]),
+                width='stretch', hide_index=True)
+            st.download_button(
+                "⬇️ Export the verification report (JSON)",
+                data=json.dumps(rapport, ensure_ascii=False, indent=2)
+                .encode("utf-8"),
+                file_name=f"verification_{pack.name}.json",
+                mime="application/json", key=f"dlverif_{pack.name}")
+
+    # --- 3. Rejeu ----------------------------------------------------------
+    with o_rejeu:
+        st.caption("Reproducibility is the point of the whole layer: the same "
+                   "file, the same frozen rules and the same as-of date must "
+                   "yield the same verdicts, the same volumes and the same "
+                   "KPIs. The replay uses the catalogue snapshot of this pack, "
+                   "never today's catalogue, and writes no new evidence.")
+        if st.button("♻️ Replay this run and compare", type="primary",
+                     key=f"rejeu_{pack.name}"):
+            with st.spinner("Replaying the run…"):
+                st.session_state[f"rapport_rejeu_{pack.name}"] = rejouer_pack(pack)
+        rapport = st.session_state.get(f"rapport_rejeu_{pack.name}")
+        if rapport:
+            if not rapport.get("rejouable"):
+                st.warning(f"Replay impossible: {rapport.get('motif')}")
+            elif rapport["identique"]:
+                st.success(
+                    f"**Identical results.** {rapport['controles_compares']} "
+                    f"control(s) compared on status, rows tested, rows in "
+                    f"breach, breach rate and KPI — no difference. "
+                    f"Overall status {rapport['statut_global_rejeu']} in both "
+                    f"runs, {nombre(rapport['exceptions_rejeu'])} exception "
+                    f"row(s) in both.")
+            else:
+                st.error(f"**{len(rapport['differences'])} difference(s)** "
+                         f"between the original run and the replay.")
+                st.dataframe(pd.DataFrame(rapport["differences"]).rename(columns={
+                    "controle": "Control", "champ": "Field",
+                    "origine": "Original run", "rejeu": "Replay"}),
+                    width='stretch', hide_index=True)
+
+    # --- 4. Tracabilite donnee -> regle -> execution -> resultat -----------
+    with o_trace:
+        regles = lire_piece(pack, "executed_rules.json", []) or []
+        resultats = lire_piece(pack, "results.json", []) or []
+        if not regles or not resultats:
+            st.info("This pack carries no frozen rules (produced by an older "
+                    "engine version).")
+        else:
+            par_regle = {r["rule_id"]: r for r in regles}
+            exceptions_par_regle: dict[str, int] = {}
+            for r in resultats:
+                exceptions_par_regle[r["rule_id"]] = (
+                    exceptions_par_regle.get(r["rule_id"], 0)
+                    + int(r.get("lignes_ko", 0)))
+            trace = pd.DataFrame([{
+                "": PUCE_RUN.get(r["statut"], "⚪"),
+                "Dataset": manifeste.get("fichier_nom", ""),
+                "Rule": r["rule_id"],
+                "Version": r.get("version", ""),
+                "Control": r.get("control_name", ""),
+                "Parameters applied": par_regle.get(r["rule_id"], {}).get("params", ""),
+                "Threshold %": par_regle.get(r["rule_id"], {})
+                .get("seuil_tolerance_pct", ""),
+                "Severity": libelle_severite(r.get("severity", "")),
+                "Target": r.get("cible", ""),
+                "Status": r["statut"],
+                "KPI": f"{r.get('kpi_nom', '')}: {r.get('kpi_valeur', '')}",
+                "Rows in breach": r.get("lignes_ko", 0),
+                "Explanation": r.get("message", ""),
+                "Remediation": par_regle.get(r["rule_id"], {})
+                .get("remediation_action", ""),
+                "Rule SHA-256": str(par_regle.get(r["rule_id"], {})
+                                    .get("rule_sha256", ""))[:16] + "…",
+            } for r in resultats])
+            st.dataframe(trace, width='stretch', hide_index=True)
+            st.caption("One line per executed control: which dataset, which rule "
+                       "in which version, with which parameters and threshold, "
+                       "what came out, and who must act.")
+            st.download_button(
+                "⬇️ Export the traceability view (CSV)",
+                data=trace.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"traceability_{pack.name}.csv", mime="text/csv",
+                key=f"dltrace_{pack.name}")
+
+            rejetees = lire_piece(pack, "rejected_rules.json",
+                                  lire_piece(pack, "rejets.json", [])) or []
+            if rejetees:
+                st.markdown("**Rules rejected by the validator before execution**")
+                st.dataframe(pd.DataFrame(rejetees), width='stretch',
+                             hide_index=True)
+
+    # --- 5. Sign-off -------------------------------------------------------
+    with o_signoff:
+        st.caption("The optional « Sign-off Fields » of appendix B.2: a human "
+                   "states that the results were reviewed. The signature is "
+                   "written into the pack itself.")
+        signoff = pack / "signoff.json"
+        if signoff.exists():
+            st.success("This run is signed off.")
+            st.json(lire_piece(pack, "signoff.json", {}))
+        else:
+            commentaire = st.text_input(
+                "Sign-off comment", key=f"signoff_{pack.name}",
+                placeholder="Results reviewed, DQ26 breaches taken in charge.")
+            if st.button("✅ Sign off this run", type="primary",
+                         key=f"btn_signoff_{pack.name}"):
+                signoff.write_text(json.dumps({
+                    "run_id": manifeste.get("run_id"),
+                    "valide_par": utilisateur or "data.steward",
+                    "horodatage": dt.datetime.now().isoformat(timespec="seconds"),
+                    "commentaire": commentaire,
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+                st.session_state["flash"] = f"Run {pack.name} signed off."
+                st.rerun()
+
+
 def ecran_audit(store: CatalogueStore, utilisateur: str) -> None:
-    bandeau_etape(3, "Chaque exécution laisse une trace reconstructible : "
-                     "identifiant de run, empreintes des sources, configuration "
-                     "exacte des règles, résultats, exceptions et journaux.")
+    bandeau_etape(3, "Every execution leaves a reconstructible trace: run ID, "
+                     "source fingerprints, the exact rule configuration, "
+                     "results, exceptions and logs — verifiable and replayable "
+                     "by a third party.")
     afficher_flash()
 
     onglet_packs, onglet_journal = st.tabs(
-        ["Preuves d'exécution", "Journal des modifications du catalogue"])
+        ["Evidence packs", "Catalogue change log"])
 
     with onglet_packs:
         packs = packs_de_preuve()
         if not packs:
-            st.info("Aucune exécution n'a encore produit de preuves.")
+            st.info("No execution has produced evidence yet.")
         else:
-            st.caption(f"{len(packs)} pack(s) de preuves sur disque, dans "
+            st.caption(f"{len(packs)} evidence pack(s) on disk, under "
                        f"`evidence/`.")
-            choix = st.selectbox("Exécution", packs, format_func=lambda p: p.name)
-            manifeste = json.loads((choix / "manifest.json").read_text(encoding="utf-8"))
-
-            g, d = st.columns([3, 2])
-            with g:
-                st.markdown("##### Les dix pièces exigées par le brief (annexe B.2)")
-                lignes = []
-                for piece, fichier, contenu in PIECES_AUDIT:
-                    present = (choix / fichier).exists()
-                    lignes.append({
-                        "": "🟢" if present else "⚪",
-                        "Pièce attendue": piece,
-                        "Support": fichier,
-                        "Contenu": contenu,
-                    })
-                st.dataframe(pd.DataFrame(lignes), width='stretch', hide_index=True)
-                st.caption("⚪ *Sign-off Fields* est marqué facultatif par le "
-                           "brief ; il se remplit ci-contre.")
-            with d:
-                st.markdown("##### Empreintes des sources")
-                sources = manifeste.get("sources", {})
-                st.dataframe(pd.DataFrame([
-                    {"Source": k, "SHA-256": v.get("sha256", "")[:16] + "…",
-                     "Lignes": v.get("lignes", "")}
-                    for k, v in sources.items()]), width='stretch', hide_index=True)
-                st.metric("Empreinte du catalogue",
-                          manifeste.get("catalogue_sha256", "")[:16] + "…")
-
-            with st.expander("Manifeste complet"):
-                st.json(manifeste)
-            if (choix / "profil_fichier.json").exists() or manifeste.get("profil_fichier"):
-                with st.expander("Structure déduite au moment du run"):
-                    st.dataframe(tableau_profil(manifeste.get("profil_fichier", [])),
-                                 width='stretch', hide_index=True)
-
-            st.markdown("##### Validation humaine (*Sign-off*)")
-            signoff = choix / "signoff.json"
-            if signoff.exists():
-                st.success("Ce run est validé.")
-                st.json(json.loads(signoff.read_text(encoding="utf-8")))
-            else:
-                commentaire = st.text_input(
-                    "Commentaire de validation",
-                    placeholder="Résultats revus, écarts DQ09 pris en charge.")
-                if st.button("✅ Valider ce run", type="primary"):
-                    signoff.write_text(json.dumps({
-                        "run_id": manifeste.get("run_id"),
-                        "valide_par": utilisateur or "data.steward",
-                        "horodatage": dt.datetime.now().isoformat(timespec="seconds"),
-                        "commentaire": commentaire,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
-                    st.session_state["flash"] = f"Run {choix.name} validé."
-                    st.rerun()
+            choix = st.selectbox(
+                "Run", packs, format_func=lambda p: (
+                    f"{p.name} · "
+                    f"{(lire_piece(p, 'manifest.json', {}) or {}).get('fichier_nom', '')}"
+                    f" · {(lire_piece(p, 'manifest.json', {}) or {}).get('statut_global', '')}"
+                ))
+            onglet_pack(choix, utilisateur)
 
     with onglet_journal:
-        st.caption("Qui a changé quoi, quand, et pourquoi. Rien ne peut être "
-                   "effacé : une règle se met en pause, ne se supprime pas.")
+        st.caption("Who changed what, when and why. Nothing can be erased: a "
+                   "rule is paused, never silently dropped.")
         df = pd.DataFrame(store.changelog)
         if df.empty:
-            st.info("Journal vide.")
+            st.info("Empty change log.")
         else:
             st.dataframe(pd.DataFrame({
-                "Date": df["timestamp"], "Auteur": df["utilisateur"],
-                "Action": df["action"], "Règle": df["rule_id"],
-                "Champ": df["champ"], "Avant": df["avant"], "Après": df["apres"],
-                "Motif": df["motif"],
+                "Date": df["timestamp"], "Author": df["utilisateur"],
+                "Action": df["action"], "Rule": df["rule_id"],
+                "Field": df["champ"], "Before": df["avant"], "After": df["apres"],
+                "Reason": df["motif"],
             }).iloc[::-1], width='stretch', hide_index=True)
 
 
@@ -1640,27 +1882,27 @@ def main() -> None:
         titre.markdown(
             "<div style='font-size:27px;font-weight:800;letter-spacing:-.02em;"
             "line-height:1.1;'>DQ&nbsp;Compass</div>", unsafe_allow_html=True)
-        st.caption("Couche de contrôle qualité générique, pilotée par catalogue")
-        utilisateur = st.text_input("Votre nom", "data.steward",
-                                    help="Identifie l'auteur au journal.")
-        page = st.radio("Cycle de vie du contrôle", PAGES,
+        st.caption("Generic, catalogue-driven data quality control layer")
+        utilisateur = st.text_input("Your name", "data.steward",
+                                    help="Identifies the author in the change log.")
+        page = st.radio("Control lifecycle", PAGES,
                         captions=[f"{verbe.capitalize()} · {composant}"
                                   for _, _, composant, verbe, _ in ETAPES])
         st.divider()
         actives = store.active_controls()
         couverture = couverture_dimensions(store)
-        st.metric("Règles en service", len(actives))
-        st.metric("Dimensions couvertes",
+        st.metric("Rules in service", len(actives))
+        st.metric("Dimensions covered",
                   f"{sum(1 for v in couverture.values() if v)} / {len(DIMENSIONS)}")
         universelles = [c for c in actives
                         if str(c.get("dataset_scope", "")).strip() in ("", "*")]
-        st.metric("Règles universelles", len(universelles),
-                  help="Règles qui s'appliquent à tout fichier, y compris ceux "
-                       "qui n'existent pas encore.")
-        if st.button("🔄 Recharger le catalogue"):
+        st.metric("Universal rules", len(universelles),
+                  help="Rules that apply to any file, including files that do "
+                       "not exist yet.")
+        if st.button("🔄 Reload the catalogue"):
             get_store(force=True)
             st.rerun()
-        st.caption(f"{dt.date.today():%d/%m/%Y}")
+        st.caption(f"{dt.date.today():%Y-%m-%d}")
 
     if page.startswith("①"):
         ecran_catalogue(store, utilisateur)

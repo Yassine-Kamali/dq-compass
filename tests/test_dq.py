@@ -429,7 +429,7 @@ def _():
         run = E.run_dq(chemin, store=st, write_evidence=False)
         resume = run.summary()
         assert resume["fail"] >= 2, f"{nom}: le socle doit trouver des ecarts"
-        eq(resume["erreur"], 0, f"{nom}: aucune erreur technique")
+        eq(resume["error"], 0, f"{nom}: aucune erreur technique")
 
 
 @check("reconciliation: rapprocher deux sources fonctionne bout en bout")
@@ -582,7 +582,7 @@ def _():
         chemin = TMP / f"{nom}.csv"
         df.to_csv(chemin, index=False)
         run = E.run_dq(chemin, store=st, write_evidence=False)
-        eq(run.summary()["erreur"], 0, f"{nom}: aucune erreur technique")
+        eq(run.summary()["error"], 0, f"{nom}: aucune erreur technique")
 
 
 @check("suggestions: un fichier trop court ne fait pas parler les statistiques")
@@ -761,9 +761,9 @@ def _():
     pd.DataFrame({"aaa": [1], "bbb": [2]}).to_csv(inconnu, index=False)
     run = E.run_dq(inconnu, store=st, write_evidence=False)
     eq(run.contrat, "inconnu", "le nom du fichier tient lieu de nom de jeu")
-    eq(set(run.scorecard["statut"]), {"NON_APPLICABLE"},
+    eq(set(run.scorecard["statut"]), {"SKIPPED"},
        "les regles universelles sont evaluees puis declarees hors perimetre")
-    eq(run.summary()["erreur"], 0, "aucune erreur technique sur un fichier inconnu")
+    eq(run.summary()["error"], 0, "aucune erreur technique sur un fichier inconnu")
 
 
 @check("portee: le nom du fichier peut etre impose plutot que deduit")
@@ -814,19 +814,19 @@ def _():
 def _():
     st = CatalogueStore()
     eq(phrase_controle(st.control("DQ02"), st),
-       "Toute colonne dont le nom correspond à « (?i)(^|_)id$ » doit être "
-       "renseignée sur chaque ligne.", "par motif de colonnes")
+       "Every column whose name matches « (?i)(^|_)id$ » must be filled on "
+       "every row.", "par motif de colonnes")
     eq(phrase_controle(st.control("DQ03"), st),
-       "La colonne « turnover_notionnel » doit être supérieure ou égale à 0.",
+       "Column « turnover_notionnel » must be greater than or equal to 0.",
        "borne minimale seule")
-    assert "ne doit jamais dépasser" in phrase_controle(st.control("DQ13"), st)
-    assert "couvrir au moins" in phrase_controle(st.control("DQ16"), st)
+    assert "must never exceed" in phrase_controle(st.control("DQ13"), st)
+    assert "must cover at least" in phrase_controle(st.control("DQ16"), st)
 
 
 @check("langage metier: les severites sont traduites")
 def _():
-    eq(libelle_severite("Critical"), "Bloquant", "Critical")
-    eq(libelle_severite("Low"), "Mineur", "Low")
+    eq(libelle_severite("Critical"), "Blocking", "Critical")
+    eq(libelle_severite("Low"), "Minor", "Low")
 
 
 # --------------------------------------------------------------------------- #
@@ -837,9 +837,9 @@ def _():
     st = store_bis()
     run = E.run_dq(FICHIER_DEMO, store=st, run_label="test", write_evidence=False)
     s = run.summary()
-    eq(s["erreur"], 0, "aucune erreur d'execution")
-    eq(s["rejets"], 0, "aucun controle rejete")
-    assert s["controles"] >= 12, f"trop peu de controles executes : {s['controles']}"
+    eq(s["error"], 0, "aucune erreur d'execution")
+    eq(s["rejected"], 0, "aucun controle rejete")
+    assert s["controls"] >= 12, f"trop peu de controles executes : {s['controls']}"
 
 
 @check("moteur: les 6 dimensions du brief sont couvertes")
@@ -869,12 +869,12 @@ def _():
     eq(run.contrat, "ref_devises", "nom du fichier")
     statuts = run.scorecard.set_index("rule_id")["statut"].to_dict()
     assert "DQ01" in statuts, "une regle universelle doit etre tentee partout"
-    eq(statuts["DQ01"], "NON_APPLICABLE",
+    eq(statuts["DQ01"], "SKIPPED",
        "faute de colonne, elle est hors perimetre : ni echec, ni erreur")
     eq(statuts.get("DQ14"), "PASS", "la regle qui trouve ses colonnes s execute")
-    eq(statuts.get("DQ02"), "NON_APPLICABLE",
+    eq(statuts.get("DQ02"), "SKIPPED",
        "le referentiel des devises ne porte aucune colonne d identifiant")
-    eq(run.summary()["erreur"], 0, "aucune erreur technique")
+    eq(run.summary()["error"], 0, "aucune erreur technique")
 
 
 @check("moteur: le referentiel est charge tout seul pour l'integrite referentielle")
@@ -904,7 +904,7 @@ def _():
                     "template": "CUSTOM_EXPRESSION",
                     # La colonne existe, donc l applicabilite laisse passer :
                     # c est la comparaison d un texte a un nombre qui casse a
-                    # l execution. Une colonne absente serait NON_APPLICABLE.
+                    # l execution. Une colonne absente serait SKIPPED.
                     "params": '{"expression": "code_devise > 0"}',
                     "dataset_scope": "*", "severity": "Low",
                     "seuil_tolerance_pct": 0}, "test")
@@ -912,7 +912,7 @@ def _():
                    write_evidence=False)
     ligne = run.scorecard[run.scorecard["rule_id"] == "DQZZ"]
     eq(len(ligne), 1, "le controle produit une ligne de resultat")
-    eq(ligne.iloc[0]["statut"], "ERREUR", "statut ERREUR et non un crash")
+    eq(ligne.iloc[0]["statut"], "ERROR", "statut ERROR et non un crash")
     assert ligne.iloc[0]["message"], "le message d'erreur doit etre conserve"
 
 
@@ -930,13 +930,14 @@ def _():
     assert a.run_id != b.run_id, "les run_id doivent differer"
 
 
-@check("moteur: l'evidence pack contient les six pieces attendues")
+@check("moteur: l'evidence pack porte les pieces de l'annexe B.2")
 def _():
     st = CatalogueStore()
     run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
                    write_evidence=True)
     for nom in ["manifest.json", "catalogue_snapshot.json", "results.json",
-                "rejets.json", "exceptions.csv", "execution.log"]:
+                "executed_rules.json", "summary.json", "rejected_rules.json",
+                "exceptions.csv", "execution.log", "checksums.json"]:
         assert (run.evidence_path / nom).exists(), f"piece manquante : {nom}"
     manifeste = json.loads((run.evidence_path / "manifest.json").read_text(encoding="utf-8"))
     eq(len(manifeste["catalogue_sha256"]), 64, "empreinte du catalogue")
@@ -946,6 +947,90 @@ def _():
     eq([c["colonne"] for c in manifeste["profil_fichier"]],
        ["code_devise", "libelle_devise", "type"], "structure tracee dans les preuves")
     shutil.rmtree(run.evidence_path, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# 6 bis. Audit : statut global, integrite du pack, rejeu
+# --------------------------------------------------------------------------- #
+def _resultat(statut: str, severity: str = "Medium") -> E.ControlResult:
+    return E.ControlResult(
+        rule_id="DQ99", control_name="T", dimension="Validity", template="RANGE",
+        dataset="d", cible="c", statut=statut, lignes_testees=10, lignes_ko=1,
+        taux_ko_pct=10.0, kpi_nom="%", kpi_valeur=90, seuil_pct=0.0,
+        severity=severity, owner="o", frequency="On demand",
+        remediation_action="r", version=1, duree_s=0.0, message="m")
+
+
+@check("audit: le statut global suit les regles RED / AMBER / GREEN")
+def _():
+    eq(E.statut_global([_resultat("PASS")]), "GREEN", "aucun ecart")
+    eq(E.statut_global([_resultat("ERROR", "Low")]), "RED", "une erreur technique")
+    eq(E.statut_global([_resultat("FAIL", "High")]), "RED", "un echec bloquant")
+    eq(E.statut_global([_resultat("FAIL", "Low")]), "AMBER", "un echec mineur")
+    eq(E.statut_global([_resultat("PASS"), _resultat("SKIPPED")]), "AMBER",
+       "un controle hors perimetre sans echec")
+
+
+def _pack_de_test() -> tuple:
+    st = CatalogueStore()
+    run = E.run_dq(ROOT / "data" / "exemples" / "inventaire.csv", store=st,
+                   write_evidence=True, run_label="test audit")
+    return run, run.evidence_path
+
+
+@check("audit: un pack fraichement ecrit est verifie conforme")
+def _():
+    run, pack = _pack_de_test()
+    try:
+        rapport = E.verifier_pack(pack)
+        eq(rapport["verdict"], "VERIFIED",
+           str([c for c in rapport["controles"] if c["statut"] == "GAP"]))
+        assert len(rapport["controles"]) >= 8, "trop peu de controles d'audit"
+    finally:
+        shutil.rmtree(pack, ignore_errors=True)
+
+
+@check("audit: une piece modifiee apres coup est detectee")
+def _():
+    """C'est tout l'objet de checksums.json : un pack altere ne passe plus."""
+    run, pack = _pack_de_test()
+    try:
+        (pack / "results.json").write_text("[]", encoding="utf-8")
+        rapport = E.verifier_pack(pack)
+        eq(rapport["verdict"], "GAP", "un pack falsifie doit etre signale")
+        integrite = next(c for c in rapport["controles"]
+                         if c["controle"].startswith("Integrity"))
+        assert "results.json" in integrite["detail"], integrite["detail"]
+    finally:
+        shutil.rmtree(pack, ignore_errors=True)
+
+
+@check("audit: rejouer un pack rend exactement les memes resultats")
+def _():
+    run, pack = _pack_de_test()
+    try:
+        rejeu = E.rejouer_pack(pack)
+        assert rejeu["rejouable"], rejeu.get("motif")
+        eq(rejeu["identique"], True, str(rejeu["differences"][:3]))
+        eq(rejeu["statut_global_rejeu"], rejeu["statut_global_origine"],
+           "meme feu tricolore")
+        eq(rejeu["exceptions_rejeu"], rejeu["exceptions_origine"],
+           "meme volume d'exceptions")
+    finally:
+        shutil.rmtree(pack, ignore_errors=True)
+
+
+@check("audit: chaque verdict porte son explication, aucune exception tronquee")
+def _():
+    st = CatalogueStore()
+    run = E.run_dq(ROOT / "data" / "exemples" / "inventaire.csv", store=st,
+                   write_evidence=False)
+    muets = [r.rule_id for r in run.resultats
+             if r.statut in ("FAIL", "SKIPPED", "ERROR") and not r.message.strip()]
+    eq(muets, [], "un FAIL ou un SKIPPED sans raison n'est pas auditable")
+    assert all(r.exceptions_completes for r in run.resultats), \
+        "aucune exception ne doit etre tronquee par defaut"
+    eq(run.manifeste["exceptions_completes"], True, "trace au manifeste")
 
 
 @check("moteur: un fichier introuvable est signale clairement")
@@ -968,8 +1053,8 @@ def _():
                    write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport.xlsx")
     eq(pd.ExcelFile(chemin).sheet_names,
-       ["SYNTHESE", "EXCEPTIONS", "COUVERTURE", "EVIDENCE", "CATALOGUE_EXECUTE",
-        "JOURNAL"], "onglets du classeur")
+       ["SUMMARY", "EXCEPTIONS", "COVERAGE", "EVIDENCE", "EXECUTED_CATALOGUE",
+        "CHANGELOG"], "onglets du classeur")
 
 
 @check("rapport: le nombre d'echecs est le premier KPI de la synthese")
@@ -977,11 +1062,11 @@ def _():
     st = CatalogueStore()
     run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport_kpi.xlsx")
-    sy = pd.read_excel(chemin, "SYNTHESE", header=None)
+    sy = pd.read_excel(chemin, "SUMMARY", header=None)
     libelles = [v for v in sy.iloc[5].tolist() if pd.notna(v)]
-    eq(libelles[0], "CONTROLES EN ECHEC", "premier libelle du bandeau")
+    eq(libelles[0], "CONTROLS IN BREACH", "premier libelle du bandeau")
     valeurs = [v for v in sy.iloc[3].tolist() if pd.notna(v)]
-    eq(str(valeurs[0]), str(run.summary()["fail"] + run.summary()["erreur"]),
+    eq(str(valeurs[0]), str(run.summary()["fail"] + run.summary()["error"]),
        "premiere valeur du bandeau")
 
 
@@ -990,9 +1075,9 @@ def _():
     st = CatalogueStore()
     run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport_phrase.xlsx")
-    texte = pd.read_excel(chemin, "SYNTHESE", header=None).astype(str).to_string()
-    assert "ce_qui_est_verifie" in texte, "colonne en langage metier absente"
-    assert "doit être renseignée sur chaque ligne" in texte, "phrase absente"
+    texte = pd.read_excel(chemin, "SUMMARY", header=None).astype(str).to_string()
+    assert "what_is_checked" in texte, "colonne en langage metier absente"
+    assert "must be filled on every row" in texte, "phrase absente"
 
 
 @check("rapport: l'onglet EVIDENCE porte l'empreinte SHA-256 des sources")
@@ -1006,13 +1091,13 @@ def _():
     assert run.manifeste["catalogue_sha256"] in texte, "hash catalogue absent"
 
 
-@check("rapport: l'onglet COUVERTURE liste les controles non executes")
+@check("rapport: l'onglet COVERAGE liste les controles non executes")
 def _():
     st = CatalogueStore()
     run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
                    write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport3.xlsx")
-    texte = pd.read_excel(chemin, "COUVERTURE", header=None).astype(str).to_string()
+    texte = pd.read_excel(chemin, "COVERAGE", header=None).astype(str).to_string()
     assert "DQ15" in texte, "le controle deprecie doit apparaitre comme trou de couverture"
 
 
@@ -1041,31 +1126,31 @@ def _():
 def _():
     at = _apptest().run()
     eq(list(at.sidebar.radio[0].options),
-       ["① Catalogue de contrôles", "② Exécution", "③ Restitution",
-        "④ Piste d'audit"],
+       ["① Control catalogue", "② Execution", "③ Reporting",
+        "④ Audit trail"],
        "definit, execute, restitue, prouve")
 
 
 @check("interface: l ecran Execution se rend sans exception")
 def _():
-    _page("② Exécution")
+    _page("② Execution")
 
 
 @check("interface: l ecran Restitution se rend sans exception")
 def _():
-    _page("③ Restitution")
+    _page("③ Reporting")
 
 
 def _restitution():
     """Lance un controle depuis l ecran d execution, puis ouvre la restitution."""
     at = _apptest().run()
-    at.sidebar.radio[0].set_value("② Exécution").run()
-    selecteur = [b for b in at.selectbox if b.label == "Fichier"][0]
+    at.sidebar.radio[0].set_value("② Execution").run()
+    selecteur = [b for b in at.selectbox if b.label == "File"][0]
     cible = [o for o in selecteur.options if "inventaire" in str(o)][0]
     at = selecteur.set_value(cible).run()
-    at = [b for b in at.button if "Lancer" in b.label][0].click().run()
+    at = [b for b in at.button if "Run the controls" in b.label][0].click().run()
     assert not at.exception, at.exception
-    at = at.sidebar.radio[0].set_value("③ Restitution").run()
+    at = at.sidebar.radio[0].set_value("③ Reporting").run()
     assert not at.exception, at.exception
     return at
 
@@ -1082,7 +1167,7 @@ def _():
 def _():
     at = _restitution()
     libelles = " ".join(b.label for b in at.get("download_button"))
-    for attendu in ["Excel", "tableau de bord", "exceptions"]:
+    for attendu in ["Excel", "scorecard", "exceptions"]:
         assert attendu in libelles, f"export manquant : {attendu} dans {libelles}"
 
 
@@ -1096,7 +1181,7 @@ def _():
     espace = {}
     exec(compile(source[debut:source.index("]", debut) + 1], "app_ui", "exec"), espace)
     ordre = [code for code, _, _, _ in espace["STATUTS_VUE"]]
-    eq(ordre.index("NON_APPLICABLE") - ordre.index("PASS"), 1,
+    eq(ordre.index("SKIPPED") - ordre.index("PASS"), 1,
        "le gris suit immediatement le vert")
     assert abs(ordre.index("PASS") - ordre.index("FAIL")) > 1, \
         "PASS et FAIL ne doivent jamais etre adjacents"
@@ -1106,26 +1191,26 @@ def _():
 
 @check("interface: l ecran Piste d audit se rend sans exception")
 def _():
-    _page("④ Piste d'audit")
+    _page("④ Audit trail")
 
 
 @check("interface: aucun ecran ne demande de declarer un fichier")
 def _():
     at = _apptest().run()
     textes = " ".join(str(m.value) for m in at.markdown)
-    assert "Décrire un nouveau fichier" not in textes, \
+    assert "Describe a new file" not in textes, \
         "aucun formulaire de declaration ne doit subsister"
 
 
 @check("interface: l'editeur propose les regles en langage metier, pas en template_id")
 def _():
-    at = _page("① Catalogue de contrôles")
-    boutons = [b for b in at.button if "Créer une règle" in b.label]
+    at = _page("① Control catalogue")
+    boutons = [b for b in at.button if "Create a rule" in b.label]
     assert boutons, f"bouton de creation absent : {[b.label for b in at.button]}"
     boutons[0].click().run()
     assert not at.exception, at.exception
     options = [str(o) for r in at.radio for o in (r.options or [])]
-    assert any("Ne jamais être vide" in o for o in options), \
+    assert any("Never be empty" in o for o in options), \
         f"libelles metier absents des options : {options[:6]}"
     assert not any("NOT_NULL" == o for o in options), \
         "les identifiants techniques ne doivent pas etre proposes a l'utilisateur"
@@ -1159,8 +1244,8 @@ def _():
 
 @check("interface: le bouton de creation est le premier de l ecran")
 def _():
-    at = _page("① Catalogue de contrôles")
-    eq(at.button[0].label, "➕ Créer une règle",
+    at = _page("① Control catalogue")
+    eq(at.button[0].label, "➕ Create a rule",
        "la creation doit venir avant le tableau, pas apres")
 
 
@@ -1168,13 +1253,13 @@ def _():
 def _():
     """Sans schema declare, l editeur doit offrir de lire un fichier : sinon une
     regle ciblant une colonne nommee est inconstruisible depuis le catalogue."""
-    at = _page("① Catalogue de contrôles")
+    at = _page("① Control catalogue")
     at.button[0].click().run()          # Creer une regle
     assert not at.exception, at.exception
     titres = [str(e.label) for e in at.expander]
-    assert any("colonne" in t.lower() for t in titres), \
+    assert any("column" in t.lower() for t in titres), \
         f"aucun selecteur de colonnes : {titres}"
-    assert "Un fichier déjà présent" in [b.label for b in at.selectbox], \
+    assert "A file already present" in [b.label for b in at.selectbox], \
         "l editeur doit proposer les fichiers presents"
 
 
@@ -1184,10 +1269,10 @@ def _():
     catalogue, on cree une regle, on charge un fichier, ses colonnes sont
     proposees. Sans cela, une regle ciblant une colonne nommee serait
     inconstruisible depuis le catalogue."""
-    at = _page("① Catalogue de contrôles")
+    at = _page("① Control catalogue")
     at.button[0].click().run()
 
-    selecteur = [b for b in at.selectbox if b.label == "Un fichier déjà présent"][0]
+    selecteur = [b for b in at.selectbox if b.label == "A file already present"][0]
     cible = [o for o in selecteur.options if "health" in str(o)][0]
     at = selecteur.set_value(cible).run()
     assert not at.exception, at.exception
@@ -1198,7 +1283,7 @@ def _():
     eq(len(colonnes), 12, "les douze colonnes du fichier")
     assert "patient_id" in colonnes, colonnes
 
-    listes = [b for b in at.selectbox if "remplie" in str(b.label)]
+    listes = [b for b in at.selectbox if "always be filled" in str(b.label)]
     assert listes, "la liste des colonnes cibles doit apparaitre"
     assert "patient_id" in [str(o) for o in listes[0].options], \
         "les colonnes du fichier doivent etre proposees comme cible"
@@ -1206,14 +1291,14 @@ def _():
 
 @check("interface: l'editeur refuse d'enregistrer une regle incomplete")
 def _():
-    at = _page("① Catalogue de contrôles")
-    [b for b in at.button if "Créer une règle" in b.label][0].click().run()
-    enregistrer = [b for b in at.button if "Enregistrer la règle" in b.label]
+    at = _page("① Control catalogue")
+    [b for b in at.button if "Create a rule" in b.label][0].click().run()
+    enregistrer = [b for b in at.button if "Save the rule" in b.label]
     assert enregistrer, "bouton d'enregistrement absent"
     assert enregistrer[0].disabled, \
         "un formulaire vide ne doit pas pouvoir etre enregistre"
     avertissements = " ".join(str(w.value) for w in at.warning)
-    assert "il manque encore" in avertissements.lower(), \
+    assert "still missing" in avertissements.lower(), \
         f"l'utilisateur doit savoir ce qui manque : {avertissements}"
 
 

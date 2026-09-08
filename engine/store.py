@@ -26,24 +26,24 @@ STORE_PATH = ROOT / "catalogue" / "store.json"
 STATUTS = ["Actif", "Suspendu", "Deprecie"]
 SEVERITES = ["Critical", "High", "Medium", "Low"]
 
-# Vocabulaire metier. Personne hors DSI ne sait ce que "Critical" implique ;
-# "Bloquant" se comprend sans glossaire.
+# Business vocabulary. Outside IT, nobody knows what "Critical" implies;
+# "Blocking" needs no glossary.
 SEVERITES_LIBELLES = {
-    "Critical": "Bloquant",
-    "High": "Important",
-    "Medium": "Moyen",
-    "Low": "Mineur",
+    "Critical": "Blocking",
+    "High": "Major",
+    "Medium": "Moderate",
+    "Low": "Minor",
 }
 STATUTS_LIBELLES = {
-    "Actif": "En service",
-    "Suspendu": "En pause",
-    "Deprecie": "Retire",
+    "Actif": "In service",
+    "Suspendu": "Paused",
+    "Deprecie": "Retired",
 }
 SEVERITES_AIDE = {
-    "Critical": "Le fichier ne doit pas etre publie tant que l'ecart persiste.",
-    "High": "A traiter avant la prochaine diffusion.",
-    "Medium": "A instruire, sans bloquer la diffusion.",
-    "Low": "Signale pour information.",
+    "Critical": "The file must not be published while the breach stands.",
+    "High": "To be fixed before the next release.",
+    "Medium": "To be reviewed, without holding the release.",
+    "Low": "Reported for information.",
 }
 
 # Changing one of these changes what the engine executes -> version bump.
@@ -125,7 +125,7 @@ class CatalogueStore:
     def add_control(self, control: dict, user: str, motif: str = "") -> dict:
         rule_id = control.get("rule_id") or self.next_rule_id()
         if self.control(rule_id):
-            raise ValueError(f"Le controle {rule_id} existe deja.")
+            raise ValueError(f"Control {rule_id} already exists.")
         new = {f: control.get(f, "") for f in CONTROL_FIELDS}
         new["rule_id"] = rule_id
         new["version"] = 1
@@ -138,7 +138,7 @@ class CatalogueStore:
     def update_control(self, rule_id: str, changes: dict, user: str, motif: str = "") -> dict:
         ctrl = self.control(rule_id)
         if ctrl is None:
-            raise ValueError(f"Controle inconnu : {rule_id}")
+            raise ValueError(f"Unknown control: {rule_id}")
         before = copy.deepcopy(ctrl)
         touched_executable = False
         for field, value in changes.items():
@@ -159,7 +159,7 @@ class CatalogueStore:
 
     def set_statut(self, rule_id: str, statut: str, user: str, motif: str = "") -> dict:
         if statut not in STATUTS:
-            raise ValueError(f"Statut invalide : {statut}. Attendu : {STATUTS}")
+            raise ValueError(f"Invalid state: {statut}. Expected: {STATUTS}")
         return self.update_control(rule_id, {"statut": statut}, user, motif)
 
     def delete_control(self, rule_id: str, user: str, motif: str = "") -> dict:
@@ -176,10 +176,10 @@ class CatalogueStore:
         """
         ctrl = self.control(rule_id)
         if ctrl is None:
-            raise ValueError(f"Controle inconnu : {rule_id}")
+            raise ValueError(f"Unknown control: {rule_id}")
         if not str(motif).strip():
             raise ValueError(
-                "Une suppression exige un motif : il est conserve au journal.")
+                "Deleting a rule requires a reason: it is kept in the log.")
         self.controls.remove(ctrl)
         self._journal("SUPPRESSION", rule_id, "*",
                       json.dumps(ctrl, ensure_ascii=False), None, user, motif)

@@ -112,15 +112,15 @@ def _completude(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
             "dimension": "Completeness",
             "template": "NOT_NULL",
             "params": {"column": col["colonne"]},
-            "control_name": f"Complétude de {col['colonne']}",
-            "description": f"La colonne {col['colonne']} est renseignée sur la "
-                           f"totalité des lignes observées ; une valeur "
-                           f"manquante signalerait une rupture de collecte.",
-            "constat": "aucune valeur vide aujourd'hui",
+            "control_name": f"Completeness of {col['colonne']}",
+            "description": f"Column {col['colonne']} is filled on every observed "
+                           f"row; a missing value would signal a break in the "
+                           f"feed.",
+            "constat": "no empty value today",
             "severity": "Medium",
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Identifier la ligne incomplète à la source "
-                                  "et redemander une extraction.",
+            "remediation_action": "Trace the incomplete row at the source and "
+                                  "request a fresh extract.",
         })
     return out
 
@@ -136,15 +136,15 @@ def _completude_partielle(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
             "dimension": "Completeness",
             "template": "NOT_NULL",
             "params": {"column": col["colonne"]},
-            "control_name": f"Complétude de {col['colonne']}",
-            "description": f"La colonne {col['colonne']} est renseignée sur "
-                           f"{100 - taux:.1f} % des lignes : les valeurs "
-                           f"manquantes sont assez rares pour ressembler à des "
-                           f"anomalies plutôt qu'à un cas de gestion.",
-            "constat": f"{col['valeurs_nulles']} valeur(s) vide(s), soit {taux:g} %",
+            "control_name": f"Completeness of {col['colonne']}",
+            "description": f"Column {col['colonne']} is filled on "
+                           f"{100 - taux:.1f} % of rows: the missing "
+                           f"values are rare enough to look like defects "
+                           f"rather than a business case.",
+            "constat": f"{col['valeurs_nulles']} empty value(s), i.e. {taux:g} %",
             "severity": "High",
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Compléter les lignes concernées à la source.",
+            "remediation_action": "Fill the affected rows at the source.",
         })
     return out
 
@@ -164,21 +164,21 @@ def _unicite(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
         part = col["valeurs_distinctes"] / lignes if lignes else 0
         if part < QUASI_UNIQUE:
             continue
-        constat = ("aucun doublon aujourd'hui" if col["unique"] else
+        constat = ("no duplicate today" if col["unique"] else
                    f"{lignes - col['valeurs_distinctes']} doublon(s) sur {lignes} lignes")
         out.append({
             "dimension": "Uniqueness",
             "template": "UNIQUE_KEY",
             "params": {"columns": [col["colonne"]]},
-            "control_name": f"Unicité de {col['colonne']}",
-            "description": f"{col['colonne']} porte {part:.1%} de valeurs "
-                           f"distinctes : elle se comporte comme un identifiant "
-                           f"de ligne et ne devrait pas contenir de doublon.",
+            "control_name": f"Uniqueness of {col['colonne']}",
+            "description": f"{col['colonne']} holds {part:.1%} distinct "
+                           f"values: it behaves like a row identifier and should "
+                           f"carry no duplicate.",
             "constat": constat,
             "severity": "High",
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Dédoublonner à la source et vérifier la clé "
-                                  "de génération.",
+            "remediation_action": "De-duplicate at the source and check the key "
+                                  "generation.",
         })
     return out
 
@@ -199,20 +199,20 @@ def _bornes(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
         negatives = int((valeurs < 0).sum())
         if 0 < negatives <= max(1, int(0.05 * len(valeurs))):
             params["min"] = 0
-            constats.append(f"{negatives} valeur(s) négative(s)")
+            constats.append(f"{negatives} negative value(s)")
         elif iqr > 0:
             bas = q1 - FACTEUR_IQR * iqr
             sous = int((valeurs < bas).sum())
             if sous:
                 params["min"] = float(round(bas, 4))
-                constats.append(f"{sous} valeur(s) anormalement basse(s)")
+                constats.append(f"{sous} abnormally low value(s)")
 
         if iqr > 0:
             haut = q3 + FACTEUR_IQR * iqr
             au_dessus = int((valeurs > haut).sum())
             if au_dessus:
                 params["max"] = float(round(haut, 4))
-                constats.append(f"{au_dessus} valeur(s) anormalement haute(s)")
+                constats.append(f"{au_dessus} abnormally high value(s)")
 
         if not params:
             continue
@@ -221,16 +221,16 @@ def _bornes(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
             "dimension": "Validity",
             "template": "RANGE",
             "params": params,
-            "control_name": f"Plage de valeurs de {nom}",
-            "description": f"La distribution de {nom} (médiane "
+            "control_name": f"Value range of {nom}",
+            "description": f"The distribution of {nom} (median "
                            f"{valeurs.median():g}, écart interquartile {iqr:g}) "
-                           f"laisse apparaître des valeurs isolées, hors de "
-                           f"portée de trois écarts interquartiles.",
+                           f"shows isolated values, beyond three "
+                           f"interquartile ranges.",
             "constat": ", ".join(constats),
             "severity": "Medium",
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Vérifier la saisie des valeurs extrêmes ; "
-                                  "corriger ou justifier chacune.",
+            "remediation_action": "Review how the extreme values were keyed; "
+                                  "fix or justify each of them.",
         })
     return out
 
@@ -250,30 +250,30 @@ def _domaines(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
             continue
         retenues = sorted(str(v) for v in frequentes.index)
         if marginales.empty:
-            constat = f"{len(retenues)} valeur(s) distincte(s), aucune marginale"
+            constat = f"{len(retenues)} distinct value(s), none marginal"
             severite, description = "Low", (
-                f"{nom} ne prend que {len(retenues)} valeurs. Figer cette liste "
-                f"empêche l'apparition silencieuse d'une modalité nouvelle.")
+                f"{nom} takes only {len(retenues)} values. Freezing that list "
+                f"prevents a new modality from appearing silently.")
         else:
             perdues = ", ".join(str(v) for v in marginales.index[:5])
-            constat = (f"{int(marginales.sum())} ligne(s) hors des "
-                       f"{len(retenues)} valeurs courantes : {perdues}")
+            constat = (f"{int(marginales.sum())} row(s) outside the "
+                       f"{len(retenues)} common values: {perdues}")
             severite, description = "Medium", (
-                f"{nom} se concentre sur {len(retenues)} valeurs qui couvrent "
-                f"{frequentes.sum() / lignes:.1%} des lignes ; le reste est "
-                f"assez marginal pour ressembler à des erreurs de saisie.")
+                f"{nom} concentrates on {len(retenues)} values covering "
+                f"{frequentes.sum() / lignes:.1%} of rows; the rest is marginal "
+                f"enough to look like keying errors.")
         out.append({
             "dimension": "Validity",
             "template": "IN_DOMAIN",
             "params": {"column": nom, "values": retenues},
-            "control_name": f"Domaine autorisé de {nom}",
+            "control_name": f"Allowed domain of {nom}",
             "description": description,
             "constat": constat,
             "severity": severite,
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Rattacher les valeurs hors liste à une "
-                                  "modalité connue, ou étendre la liste si la "
-                                  "nouvelle valeur est légitime.",
+            "remediation_action": "Map the out-of-list values to a known one, "
+                                  "or extend the list if the new value is "
+                                  "legitimate.",
         })
     return out
 
@@ -298,16 +298,16 @@ def _formats(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
             "dimension": "Validity",
             "template": "MATCHES_REGEX",
             "params": {"column": nom, "pattern": _regex_depuis_forme(dominante)},
-            "control_name": f"Format de {nom}",
-            "description": f"{part:.1%} des valeurs de {nom} partagent la même "
-                           f"forme. Figer ce format détecte les ruptures de "
-                           f"convention en amont.",
-            "constat": ("format homogène sur toutes les lignes" if not deviantes
-                        else f"{deviantes} valeur(s) de forme différente"),
+            "control_name": f"Format of {nom}",
+            "description": f"{part:.1%} of the values of {nom} share the same "
+                           f"shape. Freezing that format catches upstream "
+                           f"convention breaks.",
+            "constat": ("uniform format on every row" if not deviantes
+                        else f"{deviantes} value(s) with a different shape"),
             "severity": "Low" if not deviantes else "Medium",
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Corriger le format à la source ou documenter "
-                                  "la variante attendue.",
+            "remediation_action": "Fix the format at the source, or document "
+                                  "the expected variant.",
         })
     return out
 
@@ -326,17 +326,17 @@ def _fraicheur(df: pd.DataFrame, profil: list[dict], as_of: dt.date) -> list[dic
             "dimension": "Timeliness",
             "template": "FRESHNESS",
             "params": {"column": nom, "max_lag_days": seuil},
-            "control_name": f"Fraîcheur de {nom}",
-            "description": f"La donnée la plus récente de {nom} date de "
-                           f"{age} jour(s). Le seuil proposé ({seuil} jours) "
-                           f"laisse une marge sur cet écart observé et alerte "
-                           f"si le flux se tarit.",
-            "constat": f"donnée la plus récente : {dates.max():%d/%m/%Y} "
-                       f"({age} jour(s))",
+            "control_name": f"Freshness of {nom}",
+            "description": f"The most recent value of {nom} is {age} day(s) "
+                           f"old. The proposed threshold ({seuil} days) leaves "
+                           f"room above that observed gap and raises an alert if "
+                           f"the feed dries up.",
+            "constat": f"most recent value: {dates.max():%Y-%m-%d} "
+                       f"({age} day(s))",
             "severity": "Medium",
             "seuil_tolerance_pct": 0.0,
-            "remediation_action": "Vérifier que l'alimentation du fichier n'est "
-                                  "pas interrompue.",
+            "remediation_action": "Check that the file feed has not been "
+                                  "interrupted.",
         })
     return out
 
@@ -365,15 +365,15 @@ def _chronologie(df: pd.DataFrame, profil: list[dict]) -> list[dict]:
                 "dimension": "Consistency",
                 "template": "DATE_ORDER",
                 "params": {"before": avant, "after": apres},
-                "control_name": f"Chronologie {avant} → {apres}",
-                "description": f"Sur {part:.1%} des lignes, {avant} précède "
-                               f"{apres}. L'ordre inverse traduit une erreur de "
-                               f"saisie ou d'appariement.",
-                "constat": ("ordre respecté partout" if not violations
-                            else f"{violations} ligne(s) dans le désordre"),
+                "control_name": f"Chronology {avant} → {apres}",
+                "description": f"On {part:.1%} of rows, {avant} precedes "
+                               f"{apres}. The reverse order betrays a keying or "
+                               f"matching error.",
+                "constat": ("order respected everywhere" if not violations
+                            else f"{violations} row(s) out of order"),
                 "severity": "High" if violations else "Low",
                 "seuil_tolerance_pct": 0.0,
-                "remediation_action": "Corriger les dates inversées à la source.",
+                "remediation_action": "Fix the reversed dates at the source.",
             })
             if len(out) >= MAX_PAIRES_DATES:
                 return out
@@ -407,7 +407,7 @@ def suggerer(df: pd.DataFrame, profil: list[dict], fichier: str,
         p["cle"] = f"{p['template']}_{i}_{p['params'].get('column', '')}"
         p["dataset_scope"] = fichier
         p["owner"] = owner
-        p["frequency"] = "A la demande"
+        p["frequency"] = "On demand"
         p["output_type"] = "Exception report"
         p["impact"] = _impact(df, profil, p, as_of) if chiffrer else None
 

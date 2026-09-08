@@ -19,7 +19,7 @@ import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "engine"))
 from store import (CatalogueStore, libelle_severite,  # noqa: E402
-                   phrase_controle)
+                   libelle_statut, phrase_controle)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "reporting" / "sorties"
@@ -93,7 +93,7 @@ def _write_table(ws, fmt: _Fmt, df: pd.DataFrame, start_row: int,
     """Write a dataframe as a bordered table with an autofilter. Returns next row."""
     widths, wrap_cols = widths or {}, wrap_cols or set()
     if df.empty:
-        ws.write(start_row, 0, "Aucune ligne", fmt.cell)
+        ws.write(start_row, 0, "No rows", fmt.cell)
         return start_row + 2
 
     for c, name in enumerate(df.columns):
@@ -105,7 +105,7 @@ def _write_table(ws, fmt: _Fmt, df: pd.DataFrame, start_row: int,
         for c, name in enumerate(df.columns):
             value = row[name]
             if name == "statut":
-                style = {"PASS": fmt.pass_, "FAIL": fmt.fail, "ERREUR": fmt.warn}.get(
+                style = {"PASS": fmt.pass_, "FAIL": fmt.fail, "ERROR": fmt.warn}.get(
                     str(value), fmt.neutre)
             elif name in wrap_cols:
                 style = fmt.wrap
@@ -145,17 +145,17 @@ def _kpi_band(ws, fmt: _Fmt, row: int, tuiles: list[tuple]) -> int:
 # --------------------------------------------------------------------------- #
 def _sheet_synthese(wb, fmt: _Fmt, run, sc: pd.DataFrame,
                     store: CatalogueStore) -> None:
-    ws = wb.add_worksheet("SYNTHESE")
+    ws = wb.add_worksheet("SUMMARY")
     ws.hide_gridlines(2)
-    ws.write(0, 0, "DQ Compass - Scorecard qualite des donnees", fmt.titre)
-    ws.write(1, 0, f"Fichier : {pathlib.Path(run.fichier).name or '-'}  |  "
-                   f"Fichier controle : {run.contrat}  |  Run {run.run_id}  |  "
-                   f"{run.horodatage}", fmt.sous_titre)
+    ws.write(0, 0, "DQ Compass - Data quality scorecard", fmt.titre)
+    ws.write(1, 0, f"File: {pathlib.Path(run.fichier).name or '-'}  |  "
+                   f"Dataset: {run.contrat}  |  Run {run.run_id}  |  "
+                   f"{run.horodatage}  |  Overall status: {run.rag}", fmt.sous_titre)
 
     s = run.summary()
-    total = max(s["controles"], 1)
+    total = max(s["controls"], 1)
     conformite = 100.0 * s["pass"] / total
-    echecs = s["fail"] + s["erreur"]
+    echecs = s["fail"] + s["error"]
     critiques = int(((sc["statut"] == "FAIL") & (sc["severity"].isin(
         ["Critical", "High"]))).sum()) if not sc.empty else 0
 
@@ -164,45 +164,46 @@ def _sheet_synthese(wb, fmt: _Fmt, run, sc: pd.DataFrame,
     alerte = (fmt.kpi_alerte, fmt.kpi_lib_alerte) if echecs else (
         fmt.kpi_ok, fmt.kpi_lib_ok)
     row = _kpi_band(ws, fmt, 3, [
-        (str(echecs), "CONTROLES EN ECHEC", alerte),
-        (str(critiques), "dont Bloquant / Important",
+        (str(echecs), "CONTROLS IN BREACH", alerte),
+        (str(critiques), "of which Blocking / Major",
          alerte if critiques else (fmt.kpi_val, fmt.kpi_lib)),
-        (f"{s['exceptions']:,}".replace(",", " "), "Lignes a instruire"),
-        (f"{conformite:.0f}%", "Taux de conformite"),
-        (str(s["controles"]), "Controles executes"),
-        (str(s["rejets"]), "Regles refusees"),
+        (f"{s['exceptions']:,}".replace(",", " "), "Rows to review"),
+        (f"{conformite:.0f}%", "Compliance rate"),
+        (str(s["controls"]), "Controls executed"),
+        (str(s["rejected"]), "Rules rejected"),
     ])
 
-    ws.write(row, 0, "Detail par controle", fmt.section)
+    ws.write(row, 0, "Control-by-control detail", fmt.section)
     table = sc.copy()
-    table.insert(2, "ce_qui_est_verifie",
+    table.insert(2, "what_is_checked",
                  [phrase_controle(store.control(r) or {}, store)
                   for r in table["rule_id"]])
     table["gravite"] = table["severity"].map(libelle_severite)
-    cols = ["rule_id", "control_name", "ce_qui_est_verifie", "statut", "gravite",
+    cols = ["rule_id", "control_name", "what_is_checked", "statut", "gravite",
             "lignes_ko", "lignes_testees", "taux_ko_pct", "kpi_nom", "kpi_valeur",
             "seuil_pct", "dimension", "cible", "owner", "frequency", "version",
-            "remediation_action"]
+            "message", "remediation_action"]
     table = table[[c for c in cols if c in table.columns]]
     table = table.sort_values(
         ["statut", "gravite", "rule_id"],
-        key=lambda s: s.map({"FAIL": 0, "ERREUR": 1, "NON_APPLICABLE": 2, "PASS": 3,
-                             "Bloquant": 0, "Important": 1, "Moyen": 2,
-                             "Mineur": 3}).fillna(9)
+        key=lambda s: s.map({"FAIL": 0, "ERROR": 1, "SKIPPED": 2, "PASS": 3,
+                             "Blocking": 0, "Major": 1, "Moderate": 2,
+                             "Minor": 3}).fillna(9)
         if s.name in ("statut", "gravite") else s)
     _write_table(ws, fmt, table, row + 1,
-                 widths={"control_name": 38, "ce_qui_est_verifie": 62, "cible": 26,
-                         "kpi_nom": 22, "remediation_action": 55, "owner": 22},
-                 wrap_cols={"remediation_action", "control_name",
-                            "ce_qui_est_verifie"})
+                 widths={"control_name": 38, "what_is_checked": 62, "cible": 26,
+                         "kpi_nom": 22, "remediation_action": 55, "owner": 22,
+                         "message": 60},
+                 wrap_cols={"remediation_action", "control_name", "message",
+                            "what_is_checked"})
 
 
 def _sheet_exceptions(wb, fmt: _Fmt, run) -> None:
     ws = wb.add_worksheet("EXCEPTIONS")
     ws.hide_gridlines(2)
-    ws.write(0, 0, "Rapport d'exceptions", fmt.titre)
-    ws.write(1, 0, f"{len(run.exceptions):,} lignes en exception. Filtrez par rule_id "
-                   f"ou severity pour instruire un lot.".replace(",", " "), fmt.sous_titre)
+    ws.write(0, 0, "Exception report", fmt.titre)
+    ws.write(1, 0, f"{len(run.exceptions):,} exception rows. Filter by rule_id or "
+                   f"severity to work through a batch.".replace(",", " "), fmt.sous_titre)
     exc = run.exceptions.copy()
     if not exc.empty and "index_source" in exc.columns:
         exc = exc.drop(columns=["index_source"])
@@ -213,14 +214,14 @@ def _sheet_exceptions(wb, fmt: _Fmt, run) -> None:
 
 
 def _sheet_couverture(wb, fmt: _Fmt, run, sc: pd.DataFrame, store: CatalogueStore) -> None:
-    ws = wb.add_worksheet("COUVERTURE")
+    ws = wb.add_worksheet("COVERAGE")
     ws.hide_gridlines(2)
-    ws.write(0, 0, "Couverture du plan de controle", fmt.titre)
-    ws.write(1, 0, "Ce que le dispositif couvre, et ce qu'il ne couvre pas encore.",
+    ws.write(0, 0, "Control coverage", fmt.titre)
+    ws.write(1, 0, "What the framework covers, and what it does not cover yet.",
              fmt.sous_titre)
 
     row = 3
-    ws.write(row, 0, "Dimensions x fichier (nombre de controles executes)", fmt.section)
+    ws.write(row, 0, "Dimensions x dataset (controls executed)", fmt.section)
     row += 1
     if sc.empty:
         pivot = pd.DataFrame()
@@ -236,33 +237,34 @@ def _sheet_couverture(wb, fmt: _Fmt, run, sc: pd.DataFrame, store: CatalogueStor
         pivot = pivot.reset_index()
     row = _write_table(ws, fmt, pivot, row, widths={"dimension": 22})
 
-    ws.write(row, 0, "Trous de couverture", fmt.section)
+    ws.write(row, 0, "Coverage gaps", fmt.section)
     row += 1
     trous = []
     couvertes = set(sc["dimension"]) if not sc.empty else set()
     for dim in DIMENSIONS_ATTENDUES:
         if dim not in couvertes:
             trous.append({"objet": dim, "type": "Dimension",
-                          "constat": "Aucun controle actif execute sur cette dimension"})
+                          "constat": "No active control executed on this dimension"})
     hors_portee = [c for c in store.active_controls()
                    if c["rule_id"] not in set(sc["rule_id"] if not sc.empty else [])]
     for c in hors_portee:
-        trous.append({"objet": c["rule_id"], "type": "Hors portee",
-                      "constat": f"{c['control_name']} - portee '{c['dataset_scope']}' "
-                                 f"ne couvre pas ce fichier"})
+        trous.append({"objet": c["rule_id"], "type": "Out of scope",
+                      "constat": f"{c['control_name']} - scope '{c['dataset_scope']}' "
+                                 f"does not cover this file"})
     if not sc.empty:
-        for _, r in sc[sc["statut"] == "NON_APPLICABLE"].iterrows():
-            trous.append({"objet": r["rule_id"], "type": "Non applicable",
+        for _, r in sc[sc["statut"] == "SKIPPED"].iterrows():
+            trous.append({"objet": r["rule_id"], "type": "Skipped",
                           "constat": f"{r['control_name']} - {r['message']}"})
     for c in store.controls:
         if c.get("statut") != "Actif":
-            trous.append({"objet": c["rule_id"], "type": f"Controle {c['statut']}",
-                          "constat": f"{c['control_name']} - non execute"})
+            trous.append({"objet": c["rule_id"],
+                          "type": f"Control {libelle_statut(c['statut'])}",
+                          "constat": f"{c['control_name']} - not executed"})
     row = _write_table(ws, fmt, pd.DataFrame(trous), row,
                        widths={"objet": 26, "type": 22, "constat": 62},
                        wrap_cols={"constat"})
 
-    ws.write(row, 0, "Repartition par severite", fmt.section)
+    ws.write(row, 0, "Breakdown by severity", fmt.section)
     row += 1
     if not sc.empty:
         sev = (sc.groupby(["severity", "statut"]).size().unstack(fill_value=0)
@@ -276,35 +278,44 @@ def _sheet_couverture(wb, fmt: _Fmt, run, sc: pd.DataFrame, store: CatalogueStor
 def _sheet_evidence(wb, fmt: _Fmt, run) -> None:
     ws = wb.add_worksheet("EVIDENCE")
     ws.hide_gridlines(2)
-    ws.write(0, 0, "Preuve d'execution", fmt.titre)
-    ws.write(1, 0, "Tout ce qui est necessaire pour rejouer ce run a l'identique.",
-             fmt.sous_titre)
+    ws.write(0, 0, "Execution evidence", fmt.titre)
+    ws.write(1, 0, "Everything needed to replay this run identically "
+                   "(brief, appendix B.2).", fmt.sous_titre)
     ws.set_column(0, 0, 30)
     ws.set_column(1, 1, 78)
 
     m = run.manifeste
     row = 3
-    ws.write(row, 0, "Identification du run", fmt.section)
+    ws.write(row, 0, "Run identification", fmt.section)
     row += 1
     lignes = [
         ("Run ID", m["run_id"]),
-        ("Libelle", m.get("libelle", "")),
-        ("Horodatage", m["horodatage"]),
-        ("Date d'arrete (as of)", m["as_of"]),
-        ("Version du moteur", m["moteur_version"]),
-        ("Empreinte SHA-256 du catalogue", m["catalogue_sha256"]),
-        ("Controles actifs au catalogue", m["controles_actifs"]),
-        ("Duree totale (s)", m["duree_totale_s"]),
+        ("Label", m.get("libelle", "")),
+        ("Execution timestamp", m["horodatage"]),
+        ("As-of date", m["as_of"]),
+        ("Overall status (RAG)", m.get("statut_global", "")),
+        ("Engine version", m["moteur_version"]),
+        ("Evidence pack version", m.get("evidence_version", "")),
+        ("Catalogue SHA-256", m["catalogue_sha256"]),
+        ("Executed rules SHA-256", m.get("regles_executees_sha256", "")),
+        ("Rules executed", m.get("regles_executees", "")),
+        ("Active controls in catalogue", m["controles_actifs"]),
+        ("Exceptions complete", "yes" if m.get("exceptions_completes", True)
+         else "NO - truncated for: "
+              + ", ".join(m.get("exceptions_tronquees_pour", []))),
+        ("Total duration (s)", m["duree_totale_s"]),
         ("Python / pandas", f"{m['python']} / {m['pandas']}"),
-        ("Machine", m["machine"]),
+        ("Machine / user", f"{m['machine']} / {m.get('utilisateur_systeme', '')}"),
+        ("Replay command", m.get("rejeu", "")),
     ]
     for cle, valeur in lignes:
         ws.write(row, 0, cle, fmt.cle)
-        ws.write(row, 1, str(valeur), fmt.mono if "SHA" in cle else fmt.cell)
+        ws.write(row, 1, str(valeur),
+                 fmt.mono if "SHA" in cle or "Replay" in cle else fmt.cell)
         row += 1
 
     row += 2
-    ws.write(row, 0, "Empreinte des sources de donnees", fmt.section)
+    ws.write(row, 0, "Input dataset references (hash)", fmt.section)
     row += 1
     sources = pd.DataFrame([
         {"dataset": k, "chemin": v["chemin"], "lignes": v["lignes"],
@@ -314,19 +325,21 @@ def _sheet_evidence(wb, fmt: _Fmt, run) -> None:
                        widths={"dataset": 22, "chemin": 40, "sha256": 68,
                                "modifie_le": 22})
 
-    ws.write(row, 0, "Controles rejetes a la validation", fmt.section)
+    ws.write(row, 0, "Rules rejected at validation", fmt.section)
     row += 1
     _write_table(ws, fmt, pd.DataFrame(run.rejets), row,
                  widths={"motif": 70, "control_name": 34}, wrap_cols={"motif"})
 
 
 def _sheet_catalogue(wb, fmt: _Fmt, store: CatalogueStore) -> None:
-    ws = wb.add_worksheet("CATALOGUE_EXECUTE")
+    ws = wb.add_worksheet("EXECUTED_CATALOGUE")
     ws.hide_gridlines(2)
-    ws.write(0, 0, "Catalogue de controles - version executee", fmt.titre)
-    ws.write(1, 0, "Copie figee des regles telles qu'executees. Ce n'est pas un lien "
-                   "vers le catalogue vivant.", fmt.sous_titre)
+    ws.write(0, 0, "Control catalogue - executed version", fmt.titre)
+    ws.write(1, 0, "Frozen copy of the rules as executed. This is not a link to "
+                   "the live catalogue.", fmt.sous_titre)
     df = pd.DataFrame(store.controls)
+    if not df.empty and "statut" in df.columns:
+        df["statut"] = df["statut"].map(libelle_statut)
     _write_table(ws, fmt, df, 3,
                  widths={"control_name": 36, "description": 55, "params": 60,
                          "logic_definition": 42, "remediation_action": 55,
@@ -336,12 +349,12 @@ def _sheet_catalogue(wb, fmt: _Fmt, store: CatalogueStore) -> None:
 
 
 def _sheet_journal(wb, fmt: _Fmt, store: CatalogueStore) -> None:
-    ws = wb.add_worksheet("JOURNAL")
+    ws = wb.add_worksheet("CHANGELOG")
     ws.hide_gridlines(2)
-    ws.write(0, 0, "Journal des modifications du catalogue", fmt.titre)
-    ws.write(1, 0, "Qui a change quoi, quand, et pourquoi. Aucune suppression n'est "
-                   "possible : un controle retire passe en statut Suspendu ou Deprecie.",
-             fmt.sous_titre)
+    ws.write(0, 0, "Catalogue change log", fmt.titre)
+    ws.write(1, 0, "Who changed what, when and why. Nothing is ever erased: a "
+                   "retired control is paused or deprecated, never deleted "
+                   "silently.", fmt.sous_titre)
     df = pd.DataFrame(store.changelog)
     if not df.empty:
         df = df.iloc[::-1].reset_index(drop=True)
@@ -364,8 +377,8 @@ def build_workbook(run, store: CatalogueStore,
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
         wb = writer.book
         wb.set_properties({
-            "title": f"DQ Compass - rapport {run.run_id}",
-            "subject": "Controle qualite des donnees",
+            "title": f"DQ Compass - report {run.run_id}",
+            "subject": "Data quality control",
             "comments": json.dumps(run.summary(), ensure_ascii=False),
             "created": dt.datetime.now(),
         })
@@ -386,10 +399,10 @@ def main() -> int:
     store = CatalogueStore()
     fichier = sys.argv[1] if len(sys.argv) > 1 else "data/prepared/bis_turnover.csv"
     nom = sys.argv[2] if len(sys.argv) > 2 else None
-    run = run_dq(fichier, dataset=nom, store=store, run_label="Rapport Excel")
+    run = run_dq(fichier, dataset=nom, store=store, run_label="Excel report")
     out = build_workbook(run, store)
-    print(f"Classeur ecrit : {out}")
-    print(f"Synthese       : {run.summary()}")
+    print(f"Workbook written : {out}")
+    print(f"Summary          : {run.summary()}")
     return 0
 
 

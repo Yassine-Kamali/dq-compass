@@ -1,0 +1,59 @@
+code_devise,libelle_devise,type
+AED,UAE dirham,REEL
+ARS,Argentine peso,REEL
+ATS,Austrian schilling,REEL
+AUD,Australian dollar,REEL
+BEF,Belgian franc,REEL
+BGN,Lev,REEL
+BHD,Bahraini dinar,REEL
+BRL,Brazilian real,REEL
+CAD,Canadian dollar,REEL
+CHF,Swiss franc,REEL
+CLP,Chilean peso,REEL
+CNY,Renminbi,REEL
+COP,Colombian peso,REEL
+CZK,Czech koruna,REEL
+DEM,Deutsche mark,REEL
+DKK,Danish krone,REEL
+EEK,Estonian kroon,REEL
+ESP,Spanish peseta,REEL
+EUR,Euro,REEL
+FIM,Finnish markka,REEL
+FRF,French franc,REEL
+GBP,Pound (sterling),REEL
+GRD,Greek drachma,REEL
+HKD,Hong Kong dollar,REEL
+HUF,Forint,REEL
+IDR,Rupiah,REEL
+IEP,Irish pound,REEL
+ILS,New shekel,REEL
+INR,Indian rupee,REEL
+ITL,Italian lira,REEL
+JPY,Yen,REEL
+KRW,Won,REEL
+LTL,Lithuanian litas,REEL
+LUF,Luxembourg franc,REEL
+LVL,Latvian lats,REEL
+MXN,Mexican peso,REEL
+MYR,Malaysian ringgit,REEL
+NLG,Dutch guilder,REEL
+NOK,Norwegian krone,REEL
+NZD,New Zealand dollar,REEL
+PEN,Sol,REEL
+PHP,Philippine peso,REEL
+PLN,Zloty,REEL
+PTE,Portuguese escudo,REEL
+RON,Romanian leu,REEL
+RUB,Russian rouble,REEL
+SAR,Saudi riyal,REEL
+SEK,Swedish krona,REEL
+SGD,Singapore dollar,REEL
+SIT,Slovenian tolar,REEL
+SKK,Slovak koruna,REEL
+THB,Baht,REEL
+TO1,Total (all currencies),AGREGAT
+TRY,Turkish lira,REEL
+TWD,New Taiwan dollar,REEL
+USD,US dollar,REEL
+XEU,European currency unit,REEL
+ZAR,Rand,REEL

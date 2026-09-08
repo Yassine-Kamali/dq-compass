@@ -1,0 +1,59 @@
+code_pays,libelle_pays,type
+1E,Residents/Local,AGREGAT
+5J,All countries (total),AGREGAT
+5Z,Non-residents/Cross-border,AGREGAT
+AE,United Arab Emirates,REEL
+AR,Argentina,REEL
+AT,Austria,REEL
+AU,Australia,REEL
+BE,Belgium,REEL
+BG,Bulgaria,REEL
+BH,Bahrain,REEL
+BR,Brazil,REEL
+CA,Canada,REEL
+CH,Switzerland,REEL
+CL,Chile,REEL
+CN,China,REEL
+CO,Colombia,REEL
+CZ,Czech Republic,REEL
+DE,Germany,REEL
+DK,Denmark,REEL
+EE,Estonia,REEL
+ES,Spain,REEL
+FI,Finland,REEL
+FR,France,REEL
+GB,United Kingdom,REEL
+GR,Greece,REEL
+HK,Hong Kong SAR,REEL
+HU,Hungary,REEL
+ID,Indonesia,REEL
+IE,Ireland,REEL
+IL,Israel,REEL
+IN,India,REEL
+IT,Italy,REEL
+JP,Japan,REEL
+KR,Korea,REEL
+LT,Lithuania,REEL
+LU,Luxembourg,REEL
+LV,Latvia,REEL
+MX,Mexico,REEL
+MY,Malaysia,REEL
+NL,Netherlands,REEL
+NO,Norway,REEL
+NZ,New Zealand,REEL
+PE,Peru,REEL
+PH,Philippines,REEL
+PL,Poland,REEL
+PT,Portugal,REEL
+RO,Romania,REEL
+RU,Russia,REEL
+SA,Saudi Arabia,REEL
+SE,Sweden,REEL
+SG,Singapore,REEL
+SI,Slovenia,REEL
+SK,Slovakia,REEL
+TH,Thailand,REEL
+TR,Turkey,REEL
+TW,Chinese Taipei,REEL
+US,United States,REEL
+ZA,South Africa,REEL

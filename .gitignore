@@ -1,0 +1,25 @@
+# Environnement
+.venv/
+__pycache__/
+*.pyc
+
+# Donnees derivees : regenerees par engine/prepare_bis.py en quelques secondes.
+# Seul le zip source est versionne (4,8 Mo), pas les 112 Mo qu'il produit.
+data/raw/*.csv
+data/prepared/
+
+# Sorties d'execution : produites a chaque run, jamais editees a la main.
+evidence/
+reporting/sorties/
+
+# Documents fournis par SG GSC, non redistribuables
+docs/*.pdf
+
+# Excel
+~$*.xlsx
+*.json.tmp
+
+# Ancien catalogue Excel en ENTREE, remplace par catalogue/store.json.
+# Conserve en local a titre d'archive, hors du depot pour ne pas laisser
+# croire qu'il est encore la source de verite.
+catalogue/*.xlsx

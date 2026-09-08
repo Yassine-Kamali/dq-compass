@@ -1305,19 +1305,22 @@ def graphe_statuts_par_dimension(sc: pd.DataFrame):
         return None
     domaine = [f"{puce} {nom}" for _, nom, puce, _ in STATUTS_VUE]
     couleurs = [teinte for _, _, _, teinte in STATUTS_VUE]
-    return alt.Chart(pd.DataFrame(lignes)).mark_bar(height=18).encode(
-        # `labelOverlap=False` : sans cela Vega n'affiche qu'une etiquette sur
-        # deux des que la colonne se resserre, et une dimension disparait.
-        y=alt.Y("Dimension:N", title=None, sort=list(DIMENSIONS.values()),
-                axis=alt.Axis(labelOverlap=False, labelLimit=140)),
+    dims_presentes = [d for d in DIMENSIONS.values()
+                      if d in set(x["Dimension"] for x in lignes)]
+    nb_dim = len(dims_presentes)
+    hauteur = max(240, 38 * nb_dim + 50)
+    return alt.Chart(pd.DataFrame(lignes)).mark_bar(size=18, cornerRadiusEnd=3).encode(
+        y=alt.Y("Dimension:N", title=None, sort=dims_presentes,
+                axis=alt.Axis(labelLimit=160, labelFontSize=12)),
         x=alt.X("Controls:Q", title="Controls executed",
                 axis=alt.Axis(tickMinStep=1)),
         color=alt.Color("Status:N",
                         scale=alt.Scale(domain=domaine, range=couleurs),
-                        legend=alt.Legend(title=None, orient="bottom", columns=2)),
+                        legend=alt.Legend(title=None, orient="bottom", columns=2,
+                                          labelFontSize=11)),
         order=alt.Order("ordre:Q", sort="ascending"),
         tooltip=["Dimension", "Status", "Controls"],
-    ).properties(height=max(150, 34 * len(set(x["Dimension"] for x in lignes))))
+    ).properties(height=hauteur)
 
 
 def graphe_ecarts_par_regle(sc: pd.DataFrame):
@@ -1328,12 +1331,14 @@ def graphe_ecarts_par_regle(sc: pd.DataFrame):
     ko["Rule"] = ko["rule_id"] + " · " + ko["control_name"].str.slice(0, 30)
     ko["Rows"] = ko["lignes_ko"]
     base = alt.Chart(ko).encode(
-        y=alt.Y("Rule:N", sort="-x", title=None),
+        y=alt.Y("Rule:N", sort="-x", title=None,
+                axis=alt.Axis(labelLimit=160, labelFontSize=12)),
         x=alt.X("Rows:Q", title="Rows in breach"))
-    barres = base.mark_bar(height=20, color=TEINTE_MAGNITUDE, cornerRadiusEnd=4)
+    barres = base.mark_bar(size=18, color=TEINTE_MAGNITUDE, cornerRadiusEnd=3)
     etiquettes = base.mark_text(align="left", dx=6, fontSize=12).encode(
         text=alt.Text("Rows:Q", format=","))
-    return (barres + etiquettes).properties(height=max(150, 34 * len(ko)))
+    hauteur = max(240, 38 * len(ko) + 50)
+    return (barres + etiquettes).properties(height=hauteur)
 
 
 def historique_du_fichier(nom_fichier: str) -> pd.DataFrame:
@@ -1417,9 +1422,6 @@ def ecran_restitution(store: CatalogueStore) -> None:
             file_name=pathlib.Path(classeur).name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    st.divider()
-    bloc_ecarts(run, store)
-
     # --- les deux graphiques ------------------------------------------------
     st.divider()
     g, d = st.columns(2)
@@ -1441,6 +1443,11 @@ def ecran_restitution(store: CatalogueStore) -> None:
             st.altair_chart(graphe, width='stretch')
             st.caption("The eight rules raising the most rows to review.")
 
+    # --- detail des ecarts a instruire -------------------------------------
+    st.divider()
+    bloc_ecarts(run, store)
+
+    st.divider()
     t1, t2, t3, t4, t5 = st.tabs([
         "Control detail", "Row-level exceptions", "Control coverage",
         "File history", "Rejected rules"])

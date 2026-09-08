@@ -21,6 +21,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "logo" / "logoH.png"
 CIBLE = ROOT / "logo" / "logo_mark.png"
 
+# La marque de l'ecole subit le meme sort, pour la meme raison : livree en noir
+# sur blanc, elle dessinerait un carre blanc dans la barre laterale. Le fond
+# devient transparent et l'encre noire passe au blanc - l'orange, lui, ne bouge
+# pas : c'est la couleur de la marque.
+SOURCE_MBA = ROOT / "logo" / "logo-mba.png"
+CIBLE_MBA = ROOT / "logo" / "logo_mba_mark.png"
+
+# En deca de cette luminance, un pixel est de l'encre sombre a eclaircir. Au-
+# dessus, c'est soit du fond, soit une couleur de marque qu'on laisse tranquille.
+ENCRE_SOMBRE = 110.0
+
 # Seuils de detourage, en luminance. Au-dela du premier, le pixel est du fond ;
 # en deca du second, c'est de l'encre ; entre les deux, le degrade rend les
 # bords lisses au lieu de les crenter.
@@ -78,6 +89,47 @@ def detourer(img: Image.Image) -> Image.Image:
     return img
 
 
+def eclaircir_l_encre(img: Image.Image) -> Image.Image:
+    """Fait passer au blanc l'encre sombre, sans toucher aux couleurs vives.
+
+    Detourer suffit pour un logo monochrome ; pas pour celui-ci, dont le mot
+    « ESG » est noir. Rendu transparent sur fond noir, il disparaitrait. On ne
+    peut pas non plus tout inverser : l'orange de « MBA » y perdrait sa teinte.
+    Le depart se fait donc sur la saturation - une encre neutre et sombre est du
+    texte, un pixel colore est de la marque.
+    """
+    px = img.load()
+    largeur, hauteur = img.size
+    for y in range(hauteur):
+        for x in range(largeur):
+            r, v, b, a = px[x, y]
+            if a == 0:
+                continue
+            if max(r, v, b) - min(r, v, b) > 40:
+                continue                      # pixel colore : la marque
+            if luminance((r, v, b)) < ENCRE_SOMBRE:
+                px[x, y] = (255, 255, 255, a)
+    return img
+
+
+def rogner_au_contenu(img: Image.Image) -> Image.Image:
+    """Retire la marge transparente, pour que le logo remplisse sa place."""
+    boite = img.getbbox()
+    return img.crop(boite) if boite else img
+
+
+def preparer_mba() -> None:
+    """Derive la marque de l'ecole, lisible sur le fond noir de l'interface."""
+    if not SOURCE_MBA.exists():
+        print(f"{SOURCE_MBA.relative_to(ROOT)} absent : rien a preparer")
+        return
+    source = Image.open(SOURCE_MBA).convert("RGBA")
+    marque = rogner_au_contenu(eclaircir_l_encre(detourer(source)))
+    marque.save(CIBLE_MBA)
+    print(f"{CIBLE_MBA.relative_to(ROOT)} ecrit "
+          f"({marque.size[0]}x{marque.size[1]}, fond transparent)")
+
+
 def main() -> None:
     source = Image.open(SOURCE).convert("RGBA")
     embleme = detourer(source.crop(bande_de_l_embleme(source)))
@@ -87,6 +139,7 @@ def main() -> None:
                           (cote - embleme.size[1]) // 2))
     carre.resize((COTE, COTE), Image.LANCZOS).save(CIBLE)
     print(f"{CIBLE.relative_to(ROOT)} ecrit ({COTE}x{COTE}, fond transparent)")
+    preparer_mba()
 
 
 if __name__ == "__main__":

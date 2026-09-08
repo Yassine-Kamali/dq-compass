@@ -228,7 +228,7 @@ def _():
 def _():
     st = make_store()
     errs = E.validate_control({"template": "N_EXISTE_PAS", "params": "{}"}, st, "ventes")
-    assert errs and "inconnu" in errs[0].lower(), errs
+    assert errs and "unknown" in errs[0].lower(), errs
 
 
 @check("validateur: parametre requis manquant rejete")
@@ -249,13 +249,13 @@ def _raison(template: str, params: dict, profil=None) -> str | None:
 @check("applicabilite: une colonne absente du fichier met la regle hors perimetre")
 def _():
     raison = _raison("NOT_NULL", {"column": "colonne_fantome"})
-    assert raison and "absente" in raison, raison
+    assert raison and "absent" in raison, raison
 
 
 @check("applicabilite: RANGE sur une colonne texte met la regle hors perimetre")
 def _():
     raison = _raison("RANGE", {"column": "devise", "min": 0})
-    assert raison and "numerique" in raison, raison
+    assert raison and "numeric" in raison, raison
 
 
 @check("applicabilite: FRESHNESS sur une mesure met la regle hors perimetre")
@@ -283,7 +283,7 @@ def _():
     errs = E.validate_control(
         {"template": "MATCHES_REGEX", "params": '{"column": "devise", "pattern": "([A-Z"}'},
         st, "ventes")
-    assert any("reguliere" in e for e in errs), errs
+    assert any("regular expression" in e for e in errs), errs
 
 
 @check("validateur: fichier de reference introuvable rejete")
@@ -294,7 +294,7 @@ def _():
          "params": '{"column": "devise", "ref_fichier": "data/absent.csv", '
                    '"ref_column": "code"}'},
         st)
-    assert any("introuvable" in e for e in errs), errs
+    assert any("not found" in e for e in errs), errs
 
 
 @check("validateur: un controle correct passe sans erreur")
@@ -682,7 +682,7 @@ def _():
     n, ko, kpi, nom, _ = E.ex_sum_reconciliation(df, p, ["montant"], ctx(st))
     eq((n, ko), (2, 1), "2026 depasse (120 > 100), 2025 non (90 < 100)")
     eq(round(kpi), 20, "depassement maximal de 20%")
-    eq(nom, "depassement maximal %", "libelle du KPI")
+    eq(nom, "maximum overshoot %", "libelle du KPI")
 
 
 @check("executeur SUM_RECONCILIATION sens=couverture_min: sous-couverture detectee")
@@ -713,7 +713,7 @@ def _():
         df, p, ["total_ttc", "montant_ht", "montant_tva"], ctx(st))
     eq((n, ko), (3, 1), "la ligne a composante manquante n'est pas testee")
     eq(round(kpi, 1), 66.7, "% de lignes rapprochees")
-    eq(nom, "% de lignes rapprochees", "libelle du KPI")
+    eq(nom, "% reconciled rows", "libelle du KPI")
     eq(exc.iloc[0]["valeur"], "130.0", "le total declare faux")
 
 

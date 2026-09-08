@@ -48,6 +48,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine"))
 sys.path.insert(0, str(ROOT / "reporting"))
 
+import catalogue_ai as ia  # noqa: E402
 from dq_engine import (EVIDENCE_DIR, applicabilite, charger_fichier,  # noqa: E402
                        parse_params, rejouer_pack, resolve_targets, run_dq,
                        validate_control, verifier_pack)
@@ -62,6 +63,14 @@ from suggestions import en_controle, suggerer  # noqa: E402
 # `engine/preparer_logo.py`. Elle sert d'icone d'onglet et de logo de barre
 # laterale ; l'emoji ne reste qu'en secours si le fichier a disparu.
 LOGO = ROOT / "logo" / "logo_mark.png"
+
+# La marque de l'ecole, a droite du titre. `logo_mba_mark.png` est la version
+# detouree que produit `engine/preparer_logo.py` : l'originale est noire sur
+# blanc et dessinerait un carre blanc sur le fond noir de l'interface. Si elle
+# n'a pas encore ete generee, on retombe sur l'originale plutot que sur rien.
+LOGO_MBA = next((p for p in (ROOT / "logo" / "logo_mba_mark.png",
+                             ROOT / "logo" / "logo-mba.png") if p.exists()),
+                None)
 
 st.set_page_config(page_title="DQ Compass", layout="wide",
                    page_icon=str(LOGO) if LOGO.exists() else "🧭")
@@ -119,10 +128,10 @@ PIECES_COMPLEMENT = [
 # La meme teinte porte l'entree de menu, l'en-tete de l'ecran et son cartouche :
 # on sait ou l'on se trouve dans le cycle sans lire une ligne.
 ETAPES = [
-    ("①", "Control catalogue", "Control Catalogue", "DEFINES", "#9B87E0"),
-    ("②", "Execution", "Data Quality Engine", "EXECUTES", "#5A9DF8"),
-    ("③", "Reporting", "Reporting Layer", "REPORTS", "#2FBFA8"),
-    ("④", "Audit trail", "Audit Layer", "EVIDENCES", "#9AAAB8"),
+    ("①", "Control catalogue", "Control Catalogue", "DEFINES", "#8269D8"),
+    ("②", "Execution", "Data Quality Engine", "EXECUTES", "#1976F5"),
+    ("③", "Reporting", "Reporting Layer", "REPORTS", "#228A79"),
+    ("④", "Audit trail", "Audit Layer", "EVIDENCES", "#677E92"),
 ]
 
 # Surfaces de l'interface. Le fond de l'application est noir - impose une fois
@@ -524,12 +533,50 @@ def widget_param(nom: str, tpl: dict, valeur, cle: str):
     return st.text_input(label, value="" if valeur is None else str(valeur), key=cle)
 
 
-def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None) -> None:
+def purger_cles_editeur() -> None:
+    """Efface les valeurs de widget que l'editeur reutilise d'une regle a l'autre.
+
+    L'editeur nomme ses widgets (`edit_template`, `param_*`, ...). Quand une
+    cle existe deja dans `session_state`, Streamlit lui donne raison contre
+    l'argument `value=` : un formulaire pre-rempli afficherait alors le contenu
+    du precedent. On efface donc ces cles avant de semer un brouillon.
+    """
+    prefixes = ("param_", "opt_", "choix_")
+    for cle in [c for c in st.session_state
+                if c == "edit_template" or c.startswith(prefixes)]:
+        st.session_state.pop(cle, None)
+
+
+def ouvrir_editeur_sur(brouillon: dict | None) -> None:
+    """Ouvre l'editeur en creation, pre-rempli par un brouillon.
+
+    Sert aux propositions de l'assistant : « Accept » et « Edit » passent tous
+    deux par ici. Le brouillon n'est qu'un jeu de valeurs par defaut - il n'a
+    aucun privilege, et suivra la meme validation qu'une saisie manuelle.
+    """
+    purger_cles_editeur()
+    st.session_state["brouillon"] = brouillon
+    st.session_state["edition"] = None
+
+
+def editeur_regle(store: CatalogueStore, utilisateur: str,
+                  control: dict | None, brouillon: dict | None = None) -> None:
+    """Editeur unique du catalogue, pour toute regle quelle qu'en soit l'origine.
+
+    `brouillon` pre-remplit une *creation* : c'est par la qu'entre une
+    proposition de l'assistant. Une regle nee d'un brouillon est enregistree
+    exactement comme une regle saisie a la main - meme validateur, meme
+    `add_control()`, meme journal. Le catalogue n'a pas a savoir d'ou elle vient.
+    """
     creation = control is None
-    control = control or {}
+    control = control or (brouillon if creation else None) or {}
     st.subheader("Create a control rule" if creation
                  else f"Edit {control['rule_id']} · "
                       f"version {control.get('version', 1)}")
+    if creation and brouillon:
+        st.info("✨ Pre-filled from an AI proposal. **Nothing is saved yet** — "
+                "check every field, then save. The rule goes through the same "
+                "validator as any other.")
 
     st.markdown("#### 1. What do you want to check?")
     simples = [t for t in store.templates if t.get("niveau", "simple") == "simple"]
@@ -723,7 +770,200 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
             enregistrer(store, f"Rule {control['rule_id']} updated "
                                f"(version {store.control(control['rule_id'])['version']}).")
         st.session_state.pop("edition", None)
+        st.session_state.pop("brouillon", None)
         st.rerun()
+
+
+def carte_proposition_ia(store: CatalogueStore, utilisateur: str, nom: str,
+                         p: dict, scope: str) -> None:
+    """Affiche une proposition de l'assistant et ses trois issues.
+
+    Aucune des trois n'ecrit au catalogue. « Accept » et « Edit » menent au meme
+    endroit - l'editeur existant, pre-rempli - parce que c'est la que se trouve
+    le validateur. Le nom des deux boutons dit seulement avec quelle intention
+    on y entre ; la trace de session, elle, retient laquelle.
+    """
+    niveau = ia.niveau_de_confiance(p.get("confidence"))
+    puce = {"high": "🟢", "medium": "🟠", "low": "⚪"}.get(niveau, "⚪")
+    cibles = ", ".join(f"`{c}`" for c in (p.get("data_element") or [])) or "—"
+
+    with st.container(border=True):
+        st.markdown(f"**{p['control_name']}**")
+        st.caption(
+            f"{DIMENSIONS.get(p['control_type'], p['control_type'])} · "
+            f"template `{p['template']}` · on {cibles} · severity "
+            f"{libelle_severite(p['suggested_severity']).lower()} · "
+            f"{puce} confidence {float(p.get('confidence') or 0):.0%} ({niveau})")
+
+        if p.get("reason"):
+            st.markdown(f"**Why:** {p['reason']}")
+        if p.get("description"):
+            st.caption(p["description"])
+        if p.get("suggested_remediation_action"):
+            st.caption(f"↩️ Suggested remediation: "
+                       f"{p['suggested_remediation_action']}")
+
+        if p.get("business_input_required"):
+            manquants = p.get("missing_business_inputs") or []
+            st.warning(
+                "**Business input required** — the assistant did not invent "
+                "these, and you must supply them before the rule means "
+                "anything:\n"
+                + ("\n".join(f"- {m}" for m in manquants)
+                   if manquants else "- unspecified"))
+
+        with st.expander("Parameters the editor will be pre-filled with"):
+            st.code(json.dumps(p.get("params") or {}, ensure_ascii=False,
+                               indent=2), language="json")
+
+        a, e, r = st.columns(3)
+        cle = p.get("cle", p["control_name"])
+        if a.button("✅ Accept", key=f"ia_ok_{nom}_{cle}", width='stretch',
+                    help="Opens the rule editor, pre-filled. Nothing is saved "
+                         "until you save it there."):
+            st.session_state.setdefault("ia_decisions", {})[cle] = "Accepted"
+            ouvrir_editeur_sur(ia.en_brouillon(p, scope=scope,
+                                               owner=utilisateur, store=store))
+            st.rerun()
+        if e.button("✏️ Edit", key=f"ia_edit_{nom}_{cle}", width='stretch',
+                    help="Same editor, same pre-fill — for when you already "
+                         "know you want to change something."):
+            st.session_state.setdefault("ia_decisions", {})[cle] = "Edited"
+            ouvrir_editeur_sur(ia.en_brouillon(p, scope=scope,
+                                               owner=utilisateur, store=store))
+            st.rerun()
+        if r.button("🗑️ Reject", key=f"ia_no_{nom}_{cle}", width='stretch',
+                    help="Drops the proposal for this session. Nothing is "
+                         "written anywhere."):
+            st.session_state.setdefault("ia_decisions", {})[cle] = "Rejected"
+            st.session_state.setdefault("ia_rejetees", set()).add(cle)
+            st.rerun()
+
+
+def bloc_assistant_ia(store: CatalogueStore, utilisateur: str) -> None:
+    """Assistant IA du catalogue : propose, explique, ne decide pas.
+
+    Il vient *apres* le profileur et les suggestions deterministes, dont il
+    recoit le resultat pour ne pas les repeter. Ce qu'il ajoute est ce que la
+    distribution ne dit pas : le sens probable d'un nom de colonne, la relation
+    entre deux dates, le fait qu'un code appelle un referentiel.
+
+    Rien de ce qui s'affiche ici n'est une regle. Une proposition ne devient un
+    controle qu'apres etre passee par l'editeur, le validateur et la main d'un
+    humain.
+    """
+    with st.expander("✨ AI Catalogue Assistant", expanded=False):
+        st.caption(
+            "An assistant, not a verdict. It reads **profiling metadata only** "
+            "— column names, inferred types, null and distinct counts. No row "
+            "of your file is ever sent. It proposes candidate controls and "
+            "says why; the deterministic engine keeps every PASS/FAIL "
+            "decision, and nothing reaches the catalogue without you.")
+
+        indisponible = ia.raison_indisponible()
+        if indisponible:
+            st.info(f"🔌 **The AI assistant is unavailable.** {indisponible}")
+            return
+
+        fichiers = fichiers_connus()
+        if not fichiers:
+            st.info("No dataset available yet. Drop a file on the "
+                    "**Execution** screen, or into `data/entrees/`.")
+            return
+
+        chemin = st.selectbox("Dataset to analyse", fichiers, index=None,
+                              placeholder="Pick a dataset…",
+                              format_func=lambda p: p.name, key="ia_fichier")
+        contexte = st.text_area(
+            "Business context (optional)", height=80, key="ia_contexte",
+            placeholder="Hospital admission records containing patients, "
+                        "encounters, diagnosis codes and treatments.",
+            help="Without it the assistant still works, but stays more "
+                 "conservative on anything it can only guess from a name.")
+        portee = st.radio("Scope of the accepted rules",
+                          ["every file", "this file"], horizontal=True,
+                          key="ia_portee")
+
+        if chemin is None:
+            return
+        nom = chemin.stem
+        scope = "*" if portee == "every file" else nom
+
+        if st.button("✨ Generate AI suggestions", type="primary",
+                     key="ia_lancer",
+                     help="Calls the Anthropic API once for the whole "
+                          "dataset. Nothing is called on any other rerun."):
+            try:
+                df, profil, deterministes = lire_fichier(chemin)
+            except (ValueError, FileNotFoundError) as exc:
+                st.error(f"Cannot read the file: {exc}")
+                return
+            with st.spinner("Asking the assistant… (metadata only)"):
+                try:
+                    st.session_state[f"ia_resultat_{nom}"] = ia.suggerer_ia(
+                        profil=profil, nom_dataset=nom, store=store,
+                        deterministes=deterministes, contexte_metier=contexte,
+                        lignes=len(df), scope=scope,
+                        controles_existants=store.controls)
+                    st.session_state.pop("ia_rejetees", None)
+                except ia.AssistantIndisponible as exc:
+                    st.session_state.pop(f"ia_resultat_{nom}", None)
+                    st.error(f"🔌 {exc}")
+
+        resultat = st.session_state.get(f"ia_resultat_{nom}")
+        if not resultat:
+            return
+
+        rejetees = st.session_state.get("ia_rejetees", set())
+        propositions = [p for p in resultat["propositions"]
+                        if p.get("cle") not in rejetees]
+
+        montrer_basses = st.checkbox(
+            "Show low-confidence proposals (< 60 %)", value=False,
+            key=f"ia_basses_{nom}",
+            help="Hidden by default: below that level the assistant is "
+                 "guessing from a column name alone.")
+        if not montrer_basses:
+            propositions = [
+                p for p in propositions
+                if ia.niveau_de_confiance(p.get("confidence")) != "low"]
+
+        st.divider()
+        if resultat["doublons"]:
+            st.caption(
+                f"🔁 {len(resultat['doublons'])} proposal(s) already covered by "
+                f"the deterministic suggestions or the catalogue were not "
+                f"repeated here — their explanation was attached to the "
+                f"existing suggestion instead.")
+        if resultat["rejets"]:
+            with st.expander(f"⛔ {len(resultat['rejets'])} proposal(s) refused "
+                             f"before display"):
+                st.caption("The assistant's output is validated like any "
+                           "untrusted input: unknown template, unknown "
+                           "dimension, column absent from the file, "
+                           "unreadable confidence.")
+                for motif in resultat["rejets"]:
+                    st.markdown(f"- {motif}")
+
+        if not propositions:
+            st.success("No further candidate control to review for this "
+                       "dataset.")
+        else:
+            st.markdown(f"##### {len(propositions)} candidate control(s) to "
+                        f"review")
+            for p in propositions:
+                carte_proposition_ia(store, utilisateur, nom, p, scope)
+
+        trace = dict(resultat["trace"])
+        trace["decisions"] = st.session_state.get("ia_decisions", {})
+        with st.expander("🧾 Session trace (not a catalogue record)"):
+            st.caption(
+                "Kept for this session only. A proposal has no governance "
+                "value until a human approves it — at which point the "
+                "catalogue's own change log takes over, through "
+                "`store.add_control()`.")
+            st.code(json.dumps(trace, ensure_ascii=False, indent=2),
+                    language="json")
 
 
 def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
@@ -735,9 +975,11 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
     if "edition" in st.session_state:
         if st.button("← Back to the catalogue"):
             st.session_state.pop("edition")
+            st.session_state.pop("brouillon", None)
             st.rerun()
         rid = st.session_state["edition"]
-        editeur_regle(store, utilisateur, store.control(rid) if rid else None)
+        editeur_regle(store, utilisateur, store.control(rid) if rid else None,
+                      brouillon=st.session_state.get("brouillon"))
         return
 
     couverture = couverture_dimensions(store)
@@ -751,12 +993,14 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
                    + ", ".join(manquantes) + ". The **Execution** screen "
                    "proposes some automatically from any file.")
 
+    bloc_assistant_ia(store, utilisateur)
+
     st.divider()
     df = pd.DataFrame(store.controls)
     creer, agir = st.columns([1, 2])
     with creer:
         if st.button("➕ Create a rule", type="primary", width='stretch'):
-            st.session_state["edition"] = None
+            ouvrir_editeur_sur(None)
             st.rerun()
         st.caption("Four steps, in plain language. You can load a file there to "
                    "pull in its columns.")
@@ -850,6 +1094,10 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
     motif = st.text_input("Reason (kept in the change log)", key="motif_action")
     a1, a2, a3, a4 = st.columns(4)
     if a1.button("✏️ Edit", width='stretch'):
+        # Purge des cles de widget : sans cela, l'editeur reafficherait les
+        # valeurs de la regle ouverte precedemment.
+        purger_cles_editeur()
+        st.session_state.pop("brouillon", None)
         st.session_state["edition"] = rid
         st.rerun()
     if a2.button("⏸️ Pause", width='stretch',
@@ -1049,8 +1297,8 @@ def ecran_execution(store: CatalogueStore, utilisateur: str) -> None:
 
     st.markdown(f"##### What the engine read in `{chemin.name}`")
     tuiles([
-        ("Rows", nombre(len(df)), "#9AAAB8"),
-        ("Columns", str(len(profil)), "#9AAAB8"),
+        ("Rows", nombre(len(df)), "#677E92"),
+        ("Columns", str(len(profil)), "#677E92"),
         ("Applicable rules", str(len(applicables)),
          "#0ca30c" if applicables else "#d03b3b"),
         ("Skipped", str(len(hors)), "#898781"),
@@ -1403,7 +1651,7 @@ def ecran_restitution(store: CatalogueStore) -> None:
     # la mesure, ensuite les cas a instruire.
     st.markdown("##### The run in six figures")
     tuiles([
-        ("Controls executed", str(s_res["controls"]), "#9AAAB8"),
+        ("Controls executed", str(s_res["controls"]), "#677E92"),
         ("Passed", str(s_res["pass"]), "#0ca30c"),
         ("In breach", str(s_res["fail"]),
          "#d03b3b" if s_res["fail"] else "#0ca30c"),
@@ -1631,7 +1879,7 @@ def onglet_pack(pack: pathlib.Path, utilisateur: str) -> None:
                            key=f"zip_{pack.name}")
 
     tuiles([
-        ("Controls", str(totaux.get("controls", "—")), "#9AAAB8"),
+        ("Controls", str(totaux.get("controls", "—")), "#677E92"),
         ("In breach", str(totaux.get("fail", "—")),
          "#d03b3b" if totaux.get("fail") else "#0ca30c"),
         ("Errors", str(totaux.get("error", "—")),
@@ -1880,15 +2128,23 @@ def main() -> None:
     store = get_store()
     st.markdown(STYLE, unsafe_allow_html=True)
     with st.sidebar:
-        marque, titre = st.columns([1, 2.6], vertical_alignment="center")
+        # Trois elements sur une ligne dans une barre laterale etroite : le
+        # titre doit tenir sans se couper. `nowrap` l'interdit formellement -
+        # sans lui, « Compass » se brise en plein mot - et la taille descend a
+        # ce qui rentre reellement entre les deux marques.
+        marque, titre, ecole = st.columns([0.9, 2.7, 1.1],
+                                          vertical_alignment="center")
         if LOGO.exists():
             marque.image(str(LOGO))
         else:
-            marque.markdown("<div style='font-size:38px;'>🧭</div>",
+            marque.markdown("<div style='font-size:34px;'>🧭</div>",
                             unsafe_allow_html=True)
         titre.markdown(
-            "<div style='font-size:27px;font-weight:800;letter-spacing:-.02em;"
-            "line-height:1.1;'>DQ&nbsp;Compass</div>", unsafe_allow_html=True)
+            "<div style='font-size:19px;font-weight:800;letter-spacing:-.02em;"
+            "line-height:1.15;white-space:nowrap;'>DQ&nbsp;Compass</div>",
+            unsafe_allow_html=True)
+        if LOGO_MBA is not None:
+            ecole.image(str(LOGO_MBA))
         st.caption("Generic, catalogue-driven data quality control layer")
         utilisateur = st.text_input("Your name", "data.steward",
                                     help="Identifies the author in the change log.")

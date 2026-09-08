@@ -28,3 +28,7 @@ docs/*.pdf
 # Conserve en local a titre d'archive, hors du depot pour ne pas laisser
 # croire qu'il est encore la source de verite.
 catalogue/*.xlsx
+
+# Secrets Streamlit : la cle Anthropic de l'assistant IA vit ici en local et
+# dans les « Secrets » de Streamlit Cloud en ligne. Jamais dans le depot.
+.streamlit/secrets.toml

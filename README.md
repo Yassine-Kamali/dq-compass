@@ -23,7 +23,8 @@ python -m venv .venv
 # .venv/bin/pip install -r requirements.txt          # macOS / Linux
 
 ./.venv/Scripts/python.exe engine/prepare_bis.py     # extrait le zip et prépare les données
-./.venv/Scripts/python.exe tests/test_dq.py          # 90 tests, doit finir à 90/90
+./.venv/Scripts/python.exe tests/test_dq.py           # 95 tests, doit finir à 95/95
+./.venv/Scripts/python.exe tests/test_catalogue_ai.py # 33 tests, doit finir à 33/33
 ```
 
 Seul le zip source (4,8 Mo) est versionné. `prepare_bis.py` l'extrait au premier
@@ -34,7 +35,8 @@ secondes, avec des empreintes SHA-256 identiques d'une machine à l'autre.
 
 ```bash
 ./.venv/Scripts/python.exe -m streamlit run ui/app.py       # interface — le chemin normal
-./.venv/Scripts/python.exe tests/test_dq.py                 # 90 tests
+./.venv/Scripts/python.exe tests/test_dq.py                 # 95 tests
+./.venv/Scripts/python.exe tests/test_catalogue_ai.py       # 33 tests (assistant IA)
 
 # en ligne de commande : un fichier à la fois, sa structure est déduite
 ./.venv/Scripts/python.exe reporting/excel_report.py data/prepared/bis_turnover.csv
@@ -230,6 +232,65 @@ Deux garde-fous évitent le bruit :
   la traîne est naturelle ;
 - sous **20 lignes**, aucune statistique n'est tirée.
 
+### L'assistant IA du catalogue (optionnel)
+
+Le profileur voit des distributions ; il ne voit pas de métier. Il sait dire que
+`encounter_id` est unique à 99,8 %, pas que `diagnosis_code` appelle un
+référentiel médical. `engine/catalogue_ai.py` ajoute cette lecture sémantique —
+et rien d'autre.
+
+Il vient **après** les suggestions déterministes, dont il reçoit le résultat
+pour ne pas les répéter :
+
+```
+fichier → profileur → suggestions déterministes → assistant IA
+        → candidats → revue humaine → éditeur existant
+        → validate_control() → store.add_control()
+```
+
+Ce qu'il ne fait jamais : aucun verdict PASS/FAIL, aucune exécution, aucune
+écriture au catalogue, aucun template hors de ceux du store, aucun seuil métier
+présenté comme un fait. Le moteur déterministe reste seul juge.
+
+**Aucune ligne du fichier ne sort de la machine.** Le sanitiseur travaille en
+liste blanche : il ne recopie que six champs de profil — nom de colonne, type
+déduit, taux de nuls, nombre de nulls, nombre de valeurs distinctes, unicité —
+plus un ratio calculé. Deux fuites possibles sont fermées explicitement : les
+modalités d'un `IN_DOMAIN` déterministe (ce sont de vraies valeurs) et les
+`constat` qui citent des exemples de lignes. Un test plante des valeurs
+sentinelles dans un jeu de données et vérifie qu'aucune n'apparaît dans la
+requête.
+
+`CUSTOM_EXPRESSION` n'est pas offert au modèle : une expression exécutable
+rédigée par une IA entrerait au catalogue puis à l'exécution sans qu'un humain
+ait lu ce qu'elle fait. Elle reste accessible à la main, dans l'éditeur.
+
+#### Configuration
+
+La clé n'est jamais dans le code. Deux sources, dans cet ordre :
+
+```bash
+# 1. variable d'environnement (prioritaire)
+export ANTHROPIC_API_KEY="sk-ant-..."        # macOS / Linux
+$env:ANTHROPIC_API_KEY = "sk-ant-..."        # PowerShell
+
+# 2. ou secrets Streamlit — voir .streamlit/secrets.toml.example
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+```
+
+`ANTHROPIC_MODEL` change le modèle interrogé ; sans elle, `claude-sonnet-5`.
+Sur **Streamlit Cloud**, rien à copier : « Manage app » → « Settings » →
+« Secrets ».
+
+`.streamlit/secrets.toml` est dans le `.gitignore`. Une clé ne doit jamais
+partir au dépôt.
+
+#### Sans clé
+
+DQ Compass fonctionne. Le profilage, les suggestions déterministes, le moteur,
+les rapports et la piste d'audit sont intacts ; l'assistant se déclare
+indisponible et le dit à l'écran. Trois tests le vérifient explicitement.
+
 ### Ce qui rend une règle universelle
 
 Une règle cible soit une **colonne** nommée (`{"column": "montant"}`), soit un
@@ -393,6 +454,7 @@ engine/store.py             CRUD + versionnement + journal d'audit
 engine/dq_engine.py         validateur, 13 exécuteurs, runner, evidence pack
 engine/profiler.py          déduction de structure — remplace toute déclaration
 engine/suggestions.py       contrôles candidats déduits du profil (§14 du brief)
+engine/catalogue_ai.py      assistant IA : métadonnées → candidats, jamais de verdict
 engine/prepare_bis.py       préparation des données et des référentiels
 engine/bootstrap_store.py   initialisation du catalogue
 engine/apply_calibration.py calibrages tracés du premier run
@@ -404,8 +466,10 @@ data/entrees/               fichiers déposés via l'interface
 reporting/excel_report.py   classeur six onglets
 ui/app.py                   interface Streamlit, quatre écrans du cycle de vie
 .streamlit/config.toml      thème de l'interface : fond noir, dans les deux modes
-logo/                       marque du projet (logoH.png) et sa version détourée
-tests/test_dq.py            90 tests, sans dépendance externe
+.streamlit/secrets.toml.example  clé Anthropic attendue — la vraie n'est jamais versionnée
+logo/                       marque du projet et celle de l'école, détourées pour le fond noir
+tests/test_dq.py            95 tests, sans dépendance externe
+tests/test_catalogue_ai.py  33 tests de l'assistant IA, sans appel réseau
 data/raw/                   source BIS d'origine
 data/prepared/              format long + extrait de démonstration
 data/ref/                   référentiels devises et pays

@@ -221,8 +221,13 @@ def _gabarit(tpl: dict, params: dict) -> str:
     elif "max" in params and "min" not in params:
         borne = "_max"
 
+    # Un ciblage par motif se dit autrement qu'un ciblage par nom : « toute
+    # colonne dont le nom ressemble a… » plutot que « la colonne X ». Tout
+    # parametre `motif_*` releve du meme cas.
+    par_motif = "colonnes_motif" in params or any(
+        str(cle).startswith("motif_") for cle in params)
     candidats = []
-    if "colonnes_motif" in params:
+    if par_motif:
         candidats += [f"phrase_motif{borne}", "phrase_motif"]
     candidats += [f"phrase{borne}", "phrase"]
     for cle in candidats:

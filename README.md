@@ -23,7 +23,7 @@ python -m venv .venv
 # .venv/bin/pip install -r requirements.txt          # macOS / Linux
 
 ./.venv/Scripts/python.exe engine/prepare_bis.py     # extrait le zip et prépare les données
-./.venv/Scripts/python.exe tests/test_dq.py          # 85 tests, doit finir à 85/85
+./.venv/Scripts/python.exe tests/test_dq.py          # 90 tests, doit finir à 90/90
 ```
 
 Seul le zip source (4,8 Mo) est versionné. `prepare_bis.py` l'extrait au premier
@@ -34,7 +34,7 @@ secondes, avec des empreintes SHA-256 identiques d'une machine à l'autre.
 
 ```bash
 ./.venv/Scripts/python.exe -m streamlit run ui/app.py       # interface — le chemin normal
-./.venv/Scripts/python.exe tests/test_dq.py                 # 85 tests
+./.venv/Scripts/python.exe tests/test_dq.py                 # 90 tests
 
 # en ligne de commande : un fichier à la fois, sa structure est déduite
 ./.venv/Scripts/python.exe reporting/excel_report.py data/prepared/bis_turnover.csv
@@ -120,13 +120,21 @@ proposées en clair plutôt qu'en champ numérique libre.
 édite les règles par l'interface. Le store JSON est la source de vérité, ce qui
 évite les conflits d'écriture d'un classeur partagé.
 
+L'interface est **noire de bout en bout**. Le thème est fixé dans
+`.streamlit/config.toml`, pour le mode sombre comme pour le mode clair de
+Streamlit : le fond ne dépend donc ni du système de l'utilisateur, ni du
+sélecteur d'apparence. Les cartes, bandeaux et tuiles dessinés en HTML par
+`ui/app.py` partent de ce noir, jamais d'une teinte de thème clair. La marque du
+projet remplace l'emoji devant le titre : `engine/preparer_logo.py` en détoure
+l'emblème sur fond transparent, sans toucher au fichier d'origine.
+
 ### Le catalogue à deux niveaux
 
-- **Template** — générique, indépendant de tout dataset. 12 implémentés une
+- **Template** — générique, indépendant de tout dataset. 13 implémentés une
   seule fois dans le moteur : `NOT_NULL`, `MATCHES_REGEX`, `IN_DOMAIN`,
   `RANGE`, `UNIQUE_KEY`, `FOREIGN_KEY`, `FIELD_EQUALS`, `DATE_ORDER`,
-  `FRESHNESS`, `SUM_RECONCILIATION`, `COUNT_RECONCILIATION`,
-  `CUSTOM_EXPRESSION`.
+  `FRESHNESS`, `SUM_RECONCILIATION`, `ROW_SUM_RECONCILIATION`,
+  `COUNT_RECONCILIATION`, `CUSTOM_EXPRESSION`.
 - **Instance de contrôle** — un template relié à un périmètre, des paramètres,
   un seuil, un propriétaire, une sévérité. C'est une ligne du catalogue.
 
@@ -134,7 +142,7 @@ proposées en clair plutôt qu'en champ numérique libre.
 
 L'annexe A.4 exige des contrôles *« independent of datasets (reusable) »*. Une
 règle qui nomme `turnover_notionnel` ne l'est pas, quelle que soit sa portée.
-Les huit règles livrées ciblent donc des **conventions de nommage**, jamais une
+Les douze règles livrées ciblent donc des **conventions de nommage**, jamais une
 colonne :
 
 | Règle | Dimension | Cible |
@@ -147,6 +155,10 @@ colonne :
 | Pourcentages entre 0 et 100 | Validité | `_pct$\|_percent\|taux` |
 | Adresses e-mail valides | Validité | `e_mail\|courriel` |
 | Fraîcheur de mise à jour | Fraîcheur | `last_update\|updated_at\|_maj$` |
+| Codes devise reconnus par le référentiel | Cohérence | même motif, rapproché de `ref_devises.csv` |
+| Codes pays reconnus par le référentiel | Cohérence | même motif, rapproché de `ref_pays.csv` |
+| Ordre chronologique des dates | Cohérence | `debut\|start\|order…` avant `fin\|end\|ship…` |
+| Total de ligne = somme des composantes | Réconciliation | `(^\|_)total(_\|$)` contre les colonnes de détail |
 
 Chaque motif a été confronté aux colonnes réelles de cinq fichiers avant d'être
 retenu. Un premier motif « devise » plus large a été **écarté** : il signalait
@@ -154,10 +166,27 @@ retenu. Un premier motif « devise » plus large a été **écarté** : il signa
 sur quatre lignes sur dix d'un fichier légitime n'est pas un contrôle, c'est du
 bruit.
 
-Cohérence et Réconciliation ne figurent pas au socle : elles exigent de nommer
-deux colonnes précises ou une seconde source. La cohérence est couverte par les
-suggestions, fichier par fichier ; la réconciliation par une règle que
-l'utilisateur crée en désignant le fichier de référence.
+**Aucun nombre de règles n'est imposé par le brief** : ce qu'il exige, ce sont
+les 14 attributs (annexe A.2) et les six dimensions (§2.2). Ces douze règles
+sont le plus petit socle qui couvre les six — une par dimension aurait suffi sur
+le papier, mais la Validité en demande plusieurs pour rester utile.
+
+Cohérence et Réconciliation ont longtemps manqué au socle, pour une raison
+technique et non métier : `FOREIGN_KEY`, `DATE_ORDER` et `SUM_RECONCILIATION`
+exigeaient de **nommer** des colonnes, ce que l'annexe A.4 interdit à un
+contrôle réutilisable. Trois évolutions du moteur ont levé l'obstacle, sans rien
+coder de spécifique à un fichier :
+
+- `FOREIGN_KEY` accepte un motif de colonnes, comme les autres modèles ;
+- `DATE_ORDER` apparie une colonne « avant » et une colonne « après » sur leur
+  **radical** — ce qui reste du nom une fois le marqueur retiré. `date_debut` va
+  avec `date_fin`, `order_date` avec `ship_date`, sans qu'aucun de ces mots ne
+  figure dans le moteur : les deux marqueurs sont des paramètres de la règle ;
+- `ROW_SUM_RECONCILIATION` rapproche une colonne de total et ses composantes à
+  l'intérieur d'une même ligne, donc **sans seconde source**.
+
+`engine/completer_dimensions.py` porte cet ajout, journalisé au catalogue comme
+toute modification de règle.
 
 ### Le fichier propose ses propres contrôles
 
@@ -242,6 +271,9 @@ d'unicité nomme donc explicitement ses colonnes.
 | `SYNTHESE` | **Nombre de contrôles en échec en premier et en grand**, puis le détail : une ligne par contrôle, sa traduction en français, feux tricolores |
 | `EXCEPTIONS` | Détail ligne à ligne, filtrable par règle et sévérité |
 | `COUVERTURE` | Dimensions × fichier, règles hors périmètre et non applicables, répartition par sévérité |
+| `EVIDENCE` | Run ID, empreintes SHA-256 des sources et du catalogue, rejets |
+| `CATALOGUE_EXECUTE` | Copie figée des règles telles qu'exécutées |
+| `JOURNAL` | Journal des modifications du catalogue |
 
 ### Le tableau de bord
 
@@ -264,9 +296,21 @@ Chaque couleur de statut est en outre doublée d'une pastille et d'un libellé :
 la couleur ne porte jamais seule le sens. La teinte des barres de magnitude
 (`#2a78d6`) tient 4,30:1 sur fond clair et 3,94:1 sur fond sombre, donc sans
 connaître le thème de l'utilisateur.
-| `EVIDENCE` | Run ID, empreintes SHA-256 des sources et du catalogue, rejets |
-| `CATALOGUE_EXECUTE` | Copie figée des règles telles qu'exécutées |
-| `JOURNAL` | Journal des modifications du catalogue |
+
+### Un écart se déplie, il ne s'empile pas
+
+Sous le bandeau de résultat, chaque contrôle en écart est un **bloc replié** :
+son titre suffit à décider s'il faut l'ouvrir — règle, colonne testée, nombre de
+lignes en écart, gravité — et il s'ouvre sur ce qui était vérifié, l'indicateur
+et son seuil, l'action attendue avec son responsable, puis les premières lignes
+concernées. Les blocs sont classés par gravité, puis par volume.
+
+Un contrôle en `ERREUR` s'ouvre sur son message technique : la règle n'a rendu
+aucun verdict, ce que l'écran dit explicitement plutôt que de l'afficher comme
+un échec.
+
+Le même composant sert à l'écran ② Exécution : ce qu'on lit juste après un run
+est exactement ce qu'on retrouve en Restitution.
 
 ---
 
@@ -346,18 +390,22 @@ Même arithmétique, deux dimensions, deux propriétaires, deux remédiations.
 ```
 catalogue/store.json        source de vérité (templates, contrôles, journal)
 engine/store.py             CRUD + versionnement + journal d'audit
-engine/dq_engine.py         validateur, 12 exécuteurs, runner, evidence pack
+engine/dq_engine.py         validateur, 13 exécuteurs, runner, evidence pack
 engine/profiler.py          déduction de structure — remplace toute déclaration
 engine/suggestions.py       contrôles candidats déduits du profil (§14 du brief)
 engine/prepare_bis.py       préparation des données et des référentiels
 engine/bootstrap_store.py   initialisation du catalogue
 engine/apply_calibration.py calibrages tracés du premier run
 engine/add_libelles_metier.py couche de langage métier des templates
+engine/completer_dimensions.py règles génériques de Cohérence et Réconciliation
+engine/preparer_logo.py     détourage de la marque pour le fond noir
 engine/fusion_contrats.py   fusion des contrats redondants (historique)
 data/entrees/               fichiers déposés via l'interface
 reporting/excel_report.py   classeur six onglets
 ui/app.py                   interface Streamlit, quatre écrans du cycle de vie
-tests/test_dq.py            85 tests, sans dépendance externe
+.streamlit/config.toml      thème de l'interface : fond noir, dans les deux modes
+logo/                       marque du projet (logoH.png) et sa version détourée
+tests/test_dq.py            90 tests, sans dépendance externe
 data/raw/                   source BIS d'origine
 data/prepared/              format long + extrait de démonstration
 data/ref/                   référentiels devises et pays

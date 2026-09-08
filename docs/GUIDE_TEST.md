@@ -17,7 +17,7 @@ cd "c:/Users/yassi/Desktop/DQ Project"
 ./.venv/Scripts/python.exe tests/test_dq.py
 ```
 
-> **Attendu :** la dernière ligne affiche `85/85 tests reussis`.
+> **Attendu :** la dernière ligne affiche `90/90 tests reussis`.
 > Si un test échoue, réglez-le avant de continuer : l'interface s'appuie
 > dessus.
 
@@ -242,7 +242,7 @@ depuis.
 
 ## Avant la présentation
 
-- [ ] `85/85 tests reussis`
+- [ ] `90/90 tests reussis`
 - [ ] `DQ03` remis en service après le test de mise en pause
 - [ ] Le contrat `inventaire` **supprimé du catalogue** si vous voulez rejouer
       l'étape 6 en direct (sinon le fichier sera déjà reconnu)

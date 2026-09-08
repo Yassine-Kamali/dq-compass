@@ -2,7 +2,7 @@
   "meta": {
     "schema": "2.0",
     "libelle": "DQ Compass - catalogue de controles",
-    "updated_at": "2026-09-08T12:40:29"
+    "updated_at": "2026-09-08T14:03:50"
   },
   "templates": [
     {
@@ -116,7 +116,7 @@
     {
       "template_id": "FOREIGN_KEY",
       "dimension": "Consistency",
-      "params_requis": "column, ref_fichier, ref_column",
+      "params_requis": "column | colonnes_motif, ref_fichier, ref_column",
       "params_optionnels": "ignorer_nulls",
       "description_logique": "Toute valeur existe dans le referentiel cible (integrite referentielle)",
       "kpi_produit": "% de valeurs rattachees",
@@ -129,9 +129,11 @@
       "params_libelles": {
         "column": "Colonne du fichier à rattacher",
         "ref_column": "Colonne du référentiel qui porte le code",
-        "ref_fichier": "Fichier de reference (chemin)"
+        "ref_fichier": "Fichier de reference (chemin)",
+        "colonnes_motif": "Motif des colonnes visées (expression régulière sur le nom)"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "Toute colonne dont le nom correspond à « {colonnes_motif} » ne peut contenir que des valeurs présentes dans « {ref_fichier} »."
     },
     {
       "template_id": "FIELD_EQUALS",
@@ -155,21 +157,24 @@
     {
       "template_id": "DATE_ORDER",
       "dimension": "Consistency",
-      "params_requis": "before, after",
+      "params_requis": "before | motif_avant, after | motif_apres",
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La date 'before' est anterieure ou egale a la date 'after'",
       "kpi_produit": "% de lignes coherentes",
       "exemple_params": "{\"before\": \"date_debut\", \"after\": \"date_fin\"}",
       "libelle_metier": "Respecter l'ordre chronologique",
       "question_metier": "Quelle date doit venir avant l'autre ?",
-      "explication": "Le contrôle échoue si les deux dates sont inversées.",
+      "explication": "Le contrôle échoue si les deux dates sont inversées. Désignées par motif, les colonnes sont appariées sur ce qui reste de leur nom une fois le marqueur retiré : « date_debut » va avec « date_fin », « order_date » avec « ship_date ».",
       "exemple_metier": "Une date d'entrée précède toujours une date de sortie.",
       "phrase": "« {before} » doit être antérieure ou égale à « {after} ».",
       "params_libelles": {
         "before": "Date qui doit venir en premier",
-        "after": "Date qui doit venir en second"
+        "after": "Date qui doit venir en second",
+        "motif_avant": "Motif des colonnes de date qui viennent en premier",
+        "motif_apres": "Motif des colonnes de date qui viennent en second"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "Toute date dont le nom correspond à « {motif_avant} » doit être antérieure ou égale à la date « {motif_apres} » du même événement."
     },
     {
       "template_id": "FRESHNESS",
@@ -255,6 +260,29 @@
         "description_metier": "Traduction en français de la condition"
       },
       "niveau": "avance"
+    },
+    {
+      "template_id": "ROW_SUM_RECONCILIATION",
+      "dimension": "Reconciliation",
+      "params_requis": "total_column | motif_total, columns | motif_parties",
+      "params_optionnels": "tolerance_pct",
+      "description_logique": "Le total porte par une ligne egale la somme de ses composantes",
+      "kpi_produit": "% de lignes rapprochees",
+      "exemple_params": "{\"motif_total\": \"(?i)(^|_)total(_|$)\"}",
+      "libelle_metier": "Égaler la somme de ses composantes",
+      "question_metier": "Quel total doit correspondre à la somme d'autres colonnes ?",
+      "explication": "Le contrôle additionne les colonnes de détail d'une ligne et compare le résultat à la colonne de total de cette même ligne. Aucun second fichier n'est nécessaire. Une ligne dont une composante manque n'est pas testée.",
+      "exemple_metier": "« total_ttc » doit égaler « montant_ht » + « tva ».",
+      "phrase": "« {total_column} » doit égaler la somme de « {columns} » sur chaque ligne.",
+      "phrase_motif": "Toute colonne de total « {motif_total} » doit égaler, sur chaque ligne, la somme des colonnes « {motif_parties} ».",
+      "params_libelles": {
+        "total_column": "Colonne qui porte le total",
+        "columns": "Colonnes à additionner",
+        "motif_total": "Motif des colonnes de total",
+        "motif_parties": "Motif des colonnes à additionner",
+        "tolerance_pct": "Écart d'arrondi toléré, en %"
+      },
+      "niveau": "simple"
     }
   ],
   "controls": [
@@ -758,6 +786,90 @@
       "output_type": "Exception report",
       "kpi": "age maximum en jours",
       "remediation_action": "Vérifier que l'alimentation du fichier n'est pas interrompue.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ25",
+      "control_name": "Codes devise reconnus par le référentiel",
+      "control_type": "Consistency",
+      "description": "Un code devise peut être bien formé et ne désigner aucune devise. Cette règle complète le contrôle de format : elle exige que la valeur existe dans le référentiel ISO 4217 livré.",
+      "template": "FOREIGN_KEY",
+      "params": "{\"colonnes_motif\": \"(?i)^(?!.*(libell|label|nom|name|desc))(code[_-]?(devise|currency)|(devise|currency)[_-]?code)$\", \"ref_fichier\": \"data/ref/ref_devises.csv\", \"ref_column\": \"code_devise\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)^(?!.*(libell|label|nom|name|desc))(code[_-]?(devise|currency)|(devise|currency)[_-]?code)$ » ne peut contenir que des valeurs présentes dans « data/ref/ref_devises.csv ».",
+      "dataset_scope": "*",
+      "data_element": "(?i)^(?!.*(libell|label|nom|name|desc))(code[_-]?(devise|currency)|(devise|currency)[_-]?code)$",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "High",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs rattachees",
+      "remediation_action": "Rapprocher le code du référentiel devises, ou compléter le référentiel s'il s'agit d'une devise légitime.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ26",
+      "control_name": "Codes pays reconnus par le référentiel",
+      "control_type": "Consistency",
+      "description": "« XX » et « ZZ » sont des codes de deux lettres parfaitement formés qui ne désignent aucun pays. Seul un rapprochement avec le référentiel ISO 3166-1 livré les distingue d'un vrai code.",
+      "template": "FOREIGN_KEY",
+      "params": "{\"colonnes_motif\": \"(?i)(^|_)(pays|country)(_?code)?$\", \"ref_fichier\": \"data/ref/ref_pays.csv\", \"ref_column\": \"code_pays\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)(^|_)(pays|country)(_?code)?$ » ne peut contenir que des valeurs présentes dans « data/ref/ref_pays.csv ».",
+      "dataset_scope": "*",
+      "data_element": "(?i)(^|_)(pays|country)(_?code)?$",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs rattachees",
+      "remediation_action": "Corriger le code pays à la source, ou compléter le référentiel pays s'il s'agit d'un pays non encore listé.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ27",
+      "control_name": "Ordre chronologique des dates d'un même événement",
+      "control_type": "Consistency",
+      "description": "Une date de début postérieure à sa date de fin est incohérente, quel que soit le métier. Les colonnes sont appariées sur leur nom : « date_debut » avec « date_fin », « order_date » avec « ship_date ».",
+      "template": "DATE_ORDER",
+      "params": "{\"motif_avant\": \"(?i)(^|_)(debut|start|creation|created|ouverture|open|commande|order|emission|admission|entree|arrivee)(_|$)\", \"motif_apres\": \"(?i)(^|_)(fin|end|cloture|close|closed|sortie|expedition|ship|shipped|livraison|delivery|delivered|reception|received|discharge|paiement|payment)(_|$)\"}",
+      "logic_definition": "Toute date dont le nom correspond à « (?i)(^|_)(debut|start|creation|created|ouverture|open|commande|order|emission|admission|entree|arrivee)(_|$) » doit être antérieure ou égale à la date « (?i)(^|_)(fin|end|cloture|close|closed|sortie|expedition|ship|shipped|livraison|delivery|delivered|reception|received|discharge|paiement|payment)(_|$) » du même événement.",
+      "dataset_scope": "*",
+      "data_element": "(?i)(^|_)(debut|start|creation|created|ouverture|open|commande|order|emission|admission|entree|arrivee)(_|$), (?i)(^|_)(fin|end|cloture|close|closed|sortie|expedition|ship|shipped|livraison|delivery|delivered|reception|received|discharge|paiement|payment)(_|$)",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "High",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de lignes coherentes",
+      "remediation_action": "Faire corriger les deux dates à la source : l'une des deux est fausse, le rapprochement métier dit laquelle.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ28",
+      "control_name": "Total de ligne égal à la somme de ses composantes",
+      "control_type": "Reconciliation",
+      "description": "Réconciliation interne à un fichier : une colonne de total doit égaler, sur chaque ligne, la somme des colonnes de détail. Aucune seconde source n'est requise, seulement la convention de nommage.",
+      "template": "ROW_SUM_RECONCILIATION",
+      "params": "{\"motif_total\": \"(?i)(^|_)total(_|$)\", \"motif_parties\": \"(?i)^(montant|amount|prix|price|cout|cost|frais|fee|taxe|tax|tva|vat|remise|discount|net|brut|gross)(_|$)\", \"tolerance_pct\": 0.01}",
+      "logic_definition": "Toute colonne de total « (?i)(^|_)total(_|$) » doit égaler, sur chaque ligne, la somme des colonnes « (?i)^(montant|amount|prix|price|cout|cost|frais|fee|taxe|tax|tva|vat|remise|discount|net|brut|gross)(_|$) ».",
+      "dataset_scope": "*",
+      "data_element": "(?i)(^|_)total(_|$), (?i)^(montant|amount|prix|price|cout|cost|frais|fee|taxe|tax|tva|vat|remise|discount|net|brut|gross)(_|$)",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "High",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de lignes rapprochees",
+      "remediation_action": "Recalculer le total à la source. Un écart de total invalide toute agrégation construite sur ce fichier.",
       "statut": "Actif",
       "version": 1,
       "effective_from": "2026-09-08"
@@ -2203,6 +2315,56 @@
       "avant": "{\"rule_id\": \"DQ25\", \"control_name\": \"Complétude_ID\", \"control_type\": \"Completeness\", \"description\": \"pour vérifier le vide\", \"template\": \"NOT_NULL\", \"params\": \"{\\\"column\\\": \\\"order_id\\\"}\", \"logic_definition\": \"La colonne « order_id » doit être renseignée sur chaque ligne.\", \"dataset_scope\": \"*\", \"data_element\": \"order_id\", \"seuil_tolerance_pct\": 0.0, \"severity\": \"Critical\", \"frequency\": \"Trimestrielle\", \"owner\": \"Data Steward\", \"output_type\": \"Exception report\", \"kpi\": \"% de completude\", \"remediation_action\": \"Rien juste prévénir\", \"statut\": \"Actif\", \"version\": 4, \"effective_from\": \"2026-09-08\"}",
       "apres": "",
       "motif": "C'était un test"
+    },
+    {
+      "timestamp": "2026-09-08T14:03:50",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "-",
+      "champ": "template",
+      "avant": "",
+      "apres": "ROW_SUM_RECONCILIATION",
+      "motif": "Couverture des six dimensions du brief : Coherence et Reconciliation etaient sans aucune regle active"
+    },
+    {
+      "timestamp": "2026-09-08T14:03:50",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "DQ25",
+      "champ": "*",
+      "avant": "",
+      "apres": "Codes devise reconnus par le référentiel",
+      "motif": "Couverture des six dimensions du brief : Coherence et Reconciliation etaient sans aucune regle active"
+    },
+    {
+      "timestamp": "2026-09-08T14:03:50",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "DQ26",
+      "champ": "*",
+      "avant": "",
+      "apres": "Codes pays reconnus par le référentiel",
+      "motif": "Couverture des six dimensions du brief : Coherence et Reconciliation etaient sans aucune regle active"
+    },
+    {
+      "timestamp": "2026-09-08T14:03:50",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "DQ27",
+      "champ": "*",
+      "avant": "",
+      "apres": "Ordre chronologique des dates d'un même événement",
+      "motif": "Couverture des six dimensions du brief : Coherence et Reconciliation etaient sans aucune regle active"
+    },
+    {
+      "timestamp": "2026-09-08T14:03:50",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "DQ28",
+      "champ": "*",
+      "avant": "",
+      "apres": "Total de ligne égal à la somme de ses composantes",
+      "motif": "Couverture des six dimensions du brief : Coherence et Reconciliation etaient sans aucune regle active"
     }
   ]
 }

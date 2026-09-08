@@ -52,7 +52,13 @@ from store import (SEVERITES, SEVERITES_AIDE, STATUTS,  # noqa: E402
                    phrase_controle, scope_matches)
 from suggestions import en_controle, suggerer  # noqa: E402
 
-st.set_page_config(page_title="DQ Compass", page_icon="🧭", layout="wide")
+# La marque du projet, detouree sur fond transparent par
+# `engine/preparer_logo.py`. Elle sert d'icone d'onglet et de logo de barre
+# laterale ; l'emoji ne reste qu'en secours si le fichier a disparu.
+LOGO = ROOT / "logo" / "logo_mark.png"
+
+st.set_page_config(page_title="DQ Compass", layout="wide",
+                   page_icon=str(LOGO) if LOGO.exists() else "🧭")
 
 ENTREES = ROOT / "data" / "entrees"
 DOSSIERS_CONNUS = [ROOT / "data" / "entrees", ROOT / "data" / "prepared",
@@ -98,46 +104,90 @@ PIECES_AUDIT = [
 # La meme teinte porte l'entree de menu, l'en-tete de l'ecran et son cartouche :
 # on sait ou l'on se trouve dans le cycle sans lire une ligne.
 ETAPES = [
-    ("①", "Catalogue de contrôles", "Control Catalogue", "DÉFINIT", "#5B4B8A"),
-    ("②", "Exécution", "Data Quality Engine", "EXÉCUTE", "#1565C0"),
-    ("③", "Restitution", "Reporting Layer", "RESTITUE", "#00796B"),
-    ("④", "Piste d'audit", "Audit Layer", "PROUVE", "#455A64"),
+    ("①", "Catalogue de contrôles", "Control Catalogue", "DÉFINIT", "#9B87E0"),
+    ("②", "Exécution", "Data Quality Engine", "EXÉCUTE", "#5A9DF8"),
+    ("③", "Restitution", "Reporting Layer", "RESTITUE", "#2FBFA8"),
+    ("④", "Piste d'audit", "Audit Layer", "PROUVE", "#9AAAB8"),
 ]
+
+# Surfaces de l'interface. Le fond de l'application est noir - impose une fois
+# pour toutes dans `.streamlit/config.toml`, y compris pour le theme clair de
+# Streamlit. Tout ce qui est dessine ici part donc du noir : une carte est un
+# cran au-dessus, un filet reste un filet, et aucune teinte de theme clair ne
+# subsiste dans le code.
+FOND_CARTE = "#0E1114"
+FOND_CREUX = "#080A0C"
+BORDURE = "#22262E"
+TEXTE_SOURDINE = "#93A0AE"
 PAGES = [f"{n} {titre}" for n, titre, _, _, _ in ETAPES]
 
+# Feuille de style. Elle ne repeint rien que le theme sache faire : le fond
+# noir, les couleurs de texte et les bordures viennent de
+# `.streamlit/config.toml`. Ne restent ici que les elements que Streamlit ne
+# thematise pas - l'en-tete flottant, le trace des onglets, la carte d'un bloc
+# depliable - et le reperage colore du cycle de vie dans la barre laterale.
 STYLE = """<style>
+/* L'en-tete flottant de Streamlit ne doit pas trancher sur la page. */
+[data-testid="stHeader"] { background: transparent; }
+
+/* Onglets : de l'air entre les libelles, un filet sous la rangee. */
+[data-testid="stTabs"] [role="tablist"] {
+    gap: 28px;
+    border-bottom: 1px solid __BORDURE__;
+}
+[data-testid="stTab"] { padding: 10px 0 12px 0; font-weight: 600; }
+
+/* Bloc depliable : une carte, pas un accordeon de formulaire. */
+[data-testid="stExpander"] details {
+    background: __FOND_CARTE__;
+    border: 1px solid __BORDURE__;
+    border-radius: 10px;
+    overflow: hidden;
+}
+[data-testid="stExpander"] details > summary { padding: 12px 16px; }
+[data-testid="stExpander"] details > summary:hover {
+    background: rgba(255, 255, 255, .05);
+}
+
+/* Tableaux : des angles adoucis, comme les cartes. */
+[data-testid="stDataFrame"] { border-radius: 10px; }
+
+/* Barre laterale : chaque etape du cycle porte sa couleur. */
 section[data-testid="stSidebar"] div[role="radiogroup"] > label {
     border-left: 5px solid transparent;
-    border-radius: 6px;
-    padding: 7px 10px;
-    margin-bottom: 5px;
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-bottom: 6px;
     transition: background .15s ease;
 }
 section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-    background: rgba(127, 127, 127, .12);
+    background: rgba(255, 255, 255, .06);
 }
 """ + "".join(
     f'section[data-testid="stSidebar"] div[role="radiogroup"] > label:'
     f'nth-of-type({i + 1}) {{ border-left-color: {c}; }}\n'
     for i, (_, _, _, _, c) in enumerate(ETAPES)) + "</style>"
+STYLE = (STYLE.replace("__BORDURE__", BORDURE)
+         .replace("__FOND_CARTE__", FOND_CARTE))
 
 
 def bandeau_etape(index: int, description: str) -> None:
     """En-tete colore d'un ecran, qui le situe dans le cycle de vie."""
     numero, titre, composant, verbe, couleur = ETAPES[index]
     st.markdown(
-        f"""<div style="background:linear-gradient(90deg,{couleur}1A,transparent);
-        border-left:6px solid {couleur};border-radius:10px;
-        padding:16px 22px;margin:0 0 16px 0;">
+        f"""<div style="background:linear-gradient(90deg,{couleur}1F,{FOND_CREUX} 70%);
+        border:1px solid {BORDURE};border-left:5px solid {couleur};
+        border-radius:12px;padding:18px 24px;margin:0 0 18px 0;">
         <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
         <span style="font-size:30px;font-weight:700;color:{couleur};
         line-height:1;">{numero}</span>
-        <span style="font-size:26px;font-weight:700;color:{couleur};">{titre}</span>
+        <span style="font-size:26px;font-weight:700;color:{couleur};
+        letter-spacing:-.01em;">{titre}</span>
         <span style="font-size:11px;letter-spacing:.14em;color:{couleur};
-        border:1px solid {couleur}66;border-radius:999px;padding:3px 11px;
+        border:1px solid {couleur}55;border-radius:999px;padding:3px 11px;
         white-space:nowrap;">{verbe} · {composant}</span></div>
-        <div style="font-size:14px;opacity:.75;margin-top:8px;max-width:70ch;">
-        {description}</div></div>""",
+        <div style="font-size:14px;color:{TEXTE_SOURDINE};margin-top:9px;
+        max-width:78ch;line-height:1.5;">{description}</div></div>""",
         unsafe_allow_html=True)
 
 
@@ -337,13 +387,35 @@ def tuiles(valeurs: list[tuple[str, str, str]]) -> None:
     cols = st.columns(len(valeurs))
     for col, (titre, valeur, couleur) in zip(cols, valeurs):
         col.markdown(
-            f"""<div style="border:1px solid #DADCE0;border-left:4px solid {couleur};
-            border-radius:8px;padding:10px 14px;background:#FFFFFF10;">
-            <div style="font-size:12px;color:#5F6368;text-transform:uppercase;
-            letter-spacing:.04em;">{titre}</div>
-            <div style="font-size:26px;font-weight:700;color:{couleur};
-            line-height:1.2;">{valeur}</div></div>""",
+            f"""<div style="background:{FOND_CARTE};border:1px solid {BORDURE};
+            border-top:3px solid {couleur};border-radius:10px;
+            padding:12px 16px 14px 16px;height:100%;">
+            <div style="font-size:11px;color:{TEXTE_SOURDINE};
+            text-transform:uppercase;letter-spacing:.09em;font-weight:600;
+            ">{titre}</div>
+            <div style="font-size:27px;font-weight:700;color:{couleur};
+            line-height:1.25;margin-top:3px;">{valeur}</div></div>""",
             unsafe_allow_html=True)
+
+
+def fiche(paires: list[tuple[str, str]]) -> None:
+    """Grille libelle / valeur, pour le detail d'un controle.
+
+    Une douzaine d'attributs alignes se lisent d'un coup d'oeil ; les memes
+    empiles en phrases ne se lisent pas du tout.
+    """
+    cases = "".join(
+        f"""<div style="min-width:150px;flex:1 1 150px;">
+        <div style="font-size:10.5px;color:{TEXTE_SOURDINE};
+        text-transform:uppercase;letter-spacing:.09em;font-weight:600;
+        ">{libelle}</div>
+        <div style="font-size:14.5px;margin-top:2px;">{valeur}</div></div>"""
+        for libelle, valeur in paires)
+    st.markdown(
+        f"""<div style="display:flex;flex-wrap:wrap;gap:18px 26px;
+        background:{FOND_CREUX};border:1px solid {BORDURE};border-radius:10px;
+        padding:14px 18px;margin-bottom:10px;">{cases}</div>""",
+        unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -361,7 +433,7 @@ def widget_param(nom: str, tpl: dict, valeur, cle: str):
     label = libelle_param(tpl, nom)
     colonnes = colonnes_vues()
 
-    if nom == "colonnes_motif":
+    if nom == "colonnes_motif" or nom.startswith("motif_"):
         return st.text_input(
             label, value=valeur or "", key=cle, placeholder="(?i)(^|_)id$",
             help="Expression régulière sur le NOM des colonnes. La règle "
@@ -393,8 +465,9 @@ def widget_param(nom: str, tpl: dict, valeur, cle: str):
     if nom in ("columns", "group_by"):
         defaut = valeur if isinstance(valeur, list) else []
         if colonnes:
-            return st.multiselect(label, colonnes,
-                                  default=[c for c in defaut if c in colonnes], key=cle)
+            return st.multiselect(label, colonnes, key=cle,
+                                  placeholder="Choisir une ou plusieurs colonnes…",
+                                  default=[c for c in defaut if c in colonnes])
         brut = st.text_input(label, value=", ".join(defaut), key=cle,
                              placeholder="colonne_a, colonne_b")
         return [v.strip() for v in brut.split(",") if v.strip()]
@@ -567,9 +640,10 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
     st.markdown("##### Récapitulatif")
     portee = "tous les fichiers" if scope.strip() in ("", "*") else scope
     st.markdown(
-        f"""<div style="background:#F1F3F4;border-left:4px solid #37474F;
-        border-radius:6px;padding:14px 18px;font-size:16px;">{phrase}<br>
-        <span style="font-size:13px;color:#5F6368;">Sur {portee} · gravité
+        f"""<div style="background:{FOND_CARTE};border:1px solid {BORDURE};
+        border-left:4px solid {ETAPES[0][4]};border-radius:10px;
+        padding:16px 20px;font-size:16px;line-height:1.5;">{phrase}<br>
+        <span style="font-size:13px;color:{TEXTE_SOURDINE};">Sur {portee} · gravité
         {libelle_severite(severity).lower()} · tolérance {seuil:g} % ·
         {owner} intervient · contrôle {frequency.lower()}</span></div>""",
         unsafe_allow_html=True)
@@ -584,8 +658,9 @@ def editeur_regle(store: CatalogueStore, utilisateur: str, control: dict | None)
         "description": description.strip(), "template": tpl["template_id"],
         "params": json.dumps(params, ensure_ascii=False),
         "logic_definition": phrase, "dataset_scope": scope.strip() or "*",
-        "data_element": ", ".join(str(v) for k, v in params.items()
-                                  if k in PARAM_COLONNE | {"colonnes_motif"}),
+        "data_element": ", ".join(
+            str(v) for k, v in params.items()
+            if k in PARAM_COLONNE | {"colonnes_motif"} or k.startswith("motif_")),
         "seuil_tolerance_pct": seuil, "severity": severity, "frequency": frequency,
         "owner": owner.strip(),
         "output_type": control.get("output_type", "Exception report"),
@@ -644,7 +719,7 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
     couverture = couverture_dimensions(store)
     couvertes = sum(1 for v in couverture.values() if v)
     st.markdown("##### Couverture des six dimensions du brief")
-    tuiles([(DIMENSIONS[d], str(n), "#1E7B34" if n else "#B3261E")
+    tuiles([(DIMENSIONS[d], str(n), "#0ca30c" if n else "#d03b3b")
             for d, n in couverture.items()])
     if couvertes < len(DIMENSIONS):
         manquantes = [DIMENSIONS[d] for d, n in couverture.items() if not n]
@@ -664,15 +739,17 @@ def ecran_catalogue(store: CatalogueStore, utilisateur: str) -> None:
     with agir:
         rid = st.selectbox(
             "Agir sur une règle existante", [""] + list(df["rule_id"]),
+            placeholder="Choisir une règle…",
             format_func=lambda r: "" if not r
             else f"{r} · {store.control(r)['control_name']}")
 
     c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-    f_dim = c1.multiselect("Dimension", list(DIMENSIONS),
+    f_dim = c1.multiselect("Dimension", list(DIMENSIONS), placeholder="Toutes",
                            format_func=lambda d: DIMENSIONS[d])
-    f_sev = c2.multiselect("Gravité", SEVERITES, format_func=libelle_severite)
+    f_sev = c2.multiselect("Gravité", SEVERITES, placeholder="Toutes",
+                           format_func=libelle_severite)
     f_statut = c3.multiselect("État", STATUTS, default=["Actif"],
-                              format_func=libelle_statut)
+                              placeholder="Tous", format_func=libelle_statut)
     f_texte = c4.text_input("Rechercher", placeholder="un mot du nom ou de la règle…")
 
     vue = df.copy()
@@ -866,13 +943,15 @@ def bloc_suggestions(store: CatalogueStore, utilisateur: str, nom: str,
         with st.expander(titre, expanded=bool(actifs)):
             for p in groupe:
                 impact = p["impact"] or 0
-                marque = f"🔴 **{impact} ligne(s) en écart**" if impact else "🟢 aucun écart aujourd'hui"
-                if st.checkbox(p["control_name"], value=impact > 0,
-                               key=f"sug_{nom}_{p['cle']}"):
-                    retenues.append(p)
-                st.caption(f"{marque} · {p['constat']} · gravité "
-                           f"{libelle_severite(p['severity']).lower()}  \n"
-                           f"{p['description']}")
+                marque = (f"🔴 **{nombre(impact)} ligne(s) en écart aujourd'hui**"
+                          if impact else "🟢 aucun écart aujourd'hui")
+                with st.container(border=True):
+                    if st.checkbox(f"**{p['control_name']}**", value=impact > 0,
+                                   key=f"sug_{nom}_{p['cle']}"):
+                        retenues.append(p)
+                    st.caption(f"{marque} · {p['constat']} · gravité "
+                               f"{libelle_severite(p['severity']).lower()}")
+                    st.caption(p["description"])
 
     if st.button(f"➕ Ajouter {len(retenues)} contrôle(s) au catalogue",
                  type="primary", disabled=not retenues, width='stretch'):
@@ -944,13 +1023,14 @@ def ecran_execution(store: CatalogueStore, utilisateur: str) -> None:
     applicables, hors = repartir_regles(store, profil, nom)
     st.divider()
 
+    st.markdown(f"##### Ce que le moteur a lu dans `{chemin.name}`")
     tuiles([
-        ("Lignes", f"{len(df):,}".replace(",", " "), "#37474F"),
-        ("Colonnes", str(len(profil)), "#37474F"),
+        ("Lignes", nombre(len(df)), "#9AAAB8"),
+        ("Colonnes", str(len(profil)), "#9AAAB8"),
         ("Règles applicables", str(len(applicables)),
-         "#1E7B34" if applicables else "#B3261E"),
-        ("Hors périmètre", str(len(hors)), "#5F6368"),
-        ("Contrôles proposés", str(len(propositions)), "#0B5394"),
+         "#0ca30c" if applicables else "#d03b3b"),
+        ("Hors périmètre", str(len(hors)), "#898781"),
+        ("Contrôles proposés", str(len(propositions)), TEINTE_MAGNITUDE),
     ])
 
     with st.expander(f"Structure déduite — {len(profil)} colonnes", expanded=False):
@@ -1020,14 +1100,23 @@ def ecran_execution(store: CatalogueStore, utilisateur: str) -> None:
     run = st.session_state.get("dernier_run")
     if run is not None and pathlib.Path(run.fichier).stem == nom:
         st.divider()
-        bandeau_resultat(run)
+        bandeau_resultat(run, store)
         st.info("Le détail complet — tableau de bord, exceptions ligne à ligne, "
                 "couverture et classeur Excel — est dans l'écran **③ Restitution**.")
 
 
-def bandeau_resultat(run) -> None:
-    """Le nombre d'echecs d'abord, en grand. C'est la seule chose qui declenche
-    une action ; le taux de conformite ne fait que rassurer."""
+def nombre(valeur) -> str:
+    """Un millier se lit avec une espace, jamais avec une virgule."""
+    return f"{int(valeur):,}".replace(",", " ")
+
+
+def bandeau_resultat(run, store: CatalogueStore | None = None) -> None:
+    """Le nombre d'echecs d'abord, en grand, puis un bloc replie par ecart.
+
+    Le detail n'est plus une suite de paragraphes empiles : chaque controle en
+    ecart est une carte fermee, qui ne s'ouvre que pour etre instruite. On lit
+    d'abord combien, ensuite lesquels, et seulement si on le demande, pourquoi.
+    """
     s = run.summary()
     echecs, erreurs = s["fail"], s["erreur"]
     sc = run.scorecard
@@ -1035,37 +1124,147 @@ def bandeau_resultat(run) -> None:
         ["Critical", "High"]))).sum()) if not sc.empty else 0
 
     if echecs or erreurs:
-        couleur, fond, bordure = "#B3261E", "#FCE8E6", "#F2B8B5"
+        couleur, fond, bordure = "#FF6B6B", "#20090A", "#5C2226"
         titre = f"{echecs} contrôle{'s' if echecs > 1 else ''} en échec"
         if erreurs:
             titre += f" · {erreurs} en erreur technique"
         sous = (f"dont {bloquants} de gravité Bloquant ou Important — "
-                f"{s['exceptions']:,} ligne(s) à instruire".replace(",", " ")
-                if bloquants else
-                f"{s['exceptions']:,} ligne(s) à instruire".replace(",", " "))
+                f"{nombre(s['exceptions'])} ligne(s) à instruire" if bloquants else
+                f"{nombre(s['exceptions'])} ligne(s) à instruire")
     else:
-        couleur, fond, bordure = "#1E7B34", "#E6F4EA", "#A8DAB5"
+        couleur, fond, bordure = "#3FD37A", "#071A0F", "#1E5233"
         titre = "Aucun contrôle en échec"
         sous = f"{s['pass']} contrôle(s) passés sans écart"
 
     st.markdown(
-        f"""<div style="background:{fond};border:2px solid {bordure};
-        border-radius:12px;padding:22px 26px;margin:6px 0 18px 0;">
-        <div style="font-size:46px;font-weight:700;color:{couleur};
-        line-height:1.05;">{titre}</div>
-        <div style="font-size:15px;color:{couleur};opacity:.85;margin-top:6px;">
+        f"""<div style="background:linear-gradient(135deg,{fond},{FOND_CREUX} 70%);
+        border:1px solid {bordure};border-left:5px solid {couleur};
+        border-radius:14px;padding:24px 28px;margin:6px 0 18px 0;">
+        <div style="font-size:44px;font-weight:700;color:{couleur};
+        line-height:1.05;letter-spacing:-.02em;">{titre}</div>
+        <div style="font-size:15px;color:{TEXTE_SOURDINE};margin-top:8px;">
         {sous}</div></div>""",
         unsafe_allow_html=True)
 
     if echecs or erreurs:
-        for _, r in sc[sc["statut"].isin(["FAIL", "ERREUR"])].iterrows():
-            st.markdown(
-                f"**{r['rule_id']} · {r['control_name']}** — "
-                f"{libelle_severite(r['severity'])}  \n"
-                f"{r['lignes_ko']:,} ligne(s) en écart sur {r['lignes_testees']:,} "
-                f"· responsable : {r['owner']}  \n"
-                f"→ *{r['remediation_action'] or 'Aucune action de remédiation définie.'}*"
-                .replace(",", " "))
+        bloc_ecarts(run, store)
+
+
+# Teinte par gravite. Elle n'est jamais seule a porter le sens : le libelle
+# metier - Bloquant, Important, Moyen, Mineur - l'accompagne partout.
+TEINTE_GRAVITE = {"Critical": "#FF5C5C", "High": "#FF9A52",
+                  "Medium": "#F2C14E", "Low": "#8FA3B8"}
+
+
+def bloc_ecarts(run, store: CatalogueStore | None = None) -> None:
+    """Un bloc depliable par controle en ecart, du plus grave au plus volumineux."""
+    sc = run.scorecard
+    incidents = sc[sc["statut"].isin(["FAIL", "ERREUR"])].copy()
+    if incidents.empty:
+        return
+    rang = {s: i for i, s in enumerate(SEVERITES)}
+    incidents["_rang"] = incidents["severity"].map(lambda g: rang.get(g, 99))
+    incidents = incidents.sort_values(["_rang", "lignes_ko"],
+                                      ascending=[True, False])
+
+    st.markdown(f"##### {len(incidents)} contrôle(s) à instruire")
+    st.caption("Du plus grave au plus volumineux. Chaque ligne se déplie sur "
+               "son détail : ce qui était vérifié, où, sur combien de lignes, "
+               "et l'action attendue.")
+    for _, r in incidents.iterrows():
+        with st.expander(entete_ecart(r), expanded=False):
+            detail_ecart(run, r, store)
+
+
+def entete_ecart(r) -> str:
+    """Le titre replie doit suffire a decider si on ouvre : quoi, combien, gravite."""
+    if r["statut"] == "ERREUR":
+        return (f"🟠  {r['rule_id']} · {r['control_name']} — erreur technique, "
+                f"aucun verdict rendu")
+    cible = "" if str(r["cible"]) in ("-", "", "nan") else f" · {r['cible']}"
+    return (f"🔴  {r['rule_id']} · {r['control_name']}{cible} — "
+            f"{nombre(r['lignes_ko'])} ligne(s) en écart sur "
+            f"{nombre(r['lignes_testees'])} · {libelle_severite(r['severity'])}")
+
+
+def detail_ecart(run, r, store: CatalogueStore | None) -> None:
+    """Le contenu d'un bloc deplie : le fait, le contexte, puis l'action."""
+    if r["statut"] == "ERREUR":
+        st.warning("La règle n'a pas pu s'exécuter sur ce fichier. Ce n'est ni "
+                   "un échec, ni un succès : aucun verdict n'est rendu, et le "
+                   "message technique ci-dessous part au journal d'exécution.")
+        st.code(r["message"] or "—", language="text")
+    else:
+        taux = float(r["taux_ko_pct"] or 0)
+        seuil = float(r["seuil_pct"] or 0)
+        fiche([
+            ("Dimension", DIMENSIONS.get(r["dimension"], r["dimension"])),
+            ("Colonne testée",
+             f"<code style='font-size:13px;'>{r['cible']}</code>"),
+            ("Lignes en écart", f"{nombre(r['lignes_ko'])} sur "
+                                f"{nombre(r['lignes_testees'])}"),
+            ("Part des lignes", f"{taux:g} % · toléré {seuil:g} %"),
+            ("Indicateur", f"{r['kpi_nom']} : {r['kpi_valeur']}"),
+            ("Gravité", libelle_severite(r["severity"])),
+        ])
+
+    controle = store.control(r["rule_id"]) if store is not None else None
+    if controle:
+        st.markdown(f"**Ce qui était vérifié** — {phrase_controle(controle, store)}")
+        if controle.get("description"):
+            st.caption(controle["description"])
+
+    couleur = TEINTE_GRAVITE.get(r["severity"], "#8FA3B8")
+    action = r["remediation_action"] or "Aucune action de remédiation définie."
+    st.markdown(
+        f"""<div style="background:{FOND_CREUX};border:1px solid {BORDURE};
+        border-left:3px solid {couleur};border-radius:8px;padding:12px 16px;
+        margin:6px 0 4px 0;">
+        <span style="font-size:10.5px;letter-spacing:.1em;font-weight:700;
+        color:{couleur};">ACTION ATTENDUE</span>
+        <div style="font-size:14.5px;margin-top:4px;">{action}</div>
+        <div style="font-size:12.5px;color:{TEXTE_SOURDINE};margin-top:6px;">
+        Responsable : {r['owner'] or '—'} · fréquence de contrôle :
+        {str(r['frequency'] or '—').lower()} · version {r['version']} de la
+        règle</div></div>""",
+        unsafe_allow_html=True)
+
+    apercu = lignes_en_ecart(run, r)
+    if apercu is not None:
+        st.caption("Les premières lignes concernées — le rapport complet est "
+                   "dans l'onglet **Exceptions ligne à ligne**.")
+        st.dataframe(apercu, width='stretch', hide_index=True)
+
+
+def lignes_en_ecart(run, r, limite: int = 10) -> pd.DataFrame | None:
+    """Les premieres exceptions de ce controle, ou None s'il n'y en a pas.
+
+    Le rapport d'exceptions nomme sa colonne comme l'executeur l'a ecrite ; le
+    tableau de bord nomme la sienne comme la cible resolue. Les deux coincident
+    le plus souvent, jamais toujours : on ne filtre donc sur la colonne que si
+    ce filtre laisse quelque chose.
+    """
+    exceptions = run.exceptions
+    if exceptions.empty:
+        return None
+    vue = exceptions[exceptions["rule_id"] == r["rule_id"]]
+    if vue.empty:
+        return None
+    if "colonne" in vue.columns:
+        ciblees = vue[vue["colonne"].astype(str) == str(r["cible"])]
+        if not ciblees.empty:
+            vue = ciblees
+    colonnes = [c for c in ("identifiant_ligne", "colonne", "valeur", "motif")
+                if c in vue.columns]
+    apercu = vue[colonnes].head(limite).copy()
+    if "valeur" in apercu.columns:
+        # Une valeur absente s'ecrit « (vide) » : `nan` est un mot de Python,
+        # pas une explication.
+        apercu["valeur"] = apercu["valeur"].astype(str).replace(
+            {"nan": "(vide)", "None": "(vide)", "": "(vide)", "NaT": "(vide)"})
+    return apercu.rename(columns={
+        "identifiant_ligne": "Ligne", "colonne": "Colonne",
+        "valeur": "Valeur lue", "motif": "Pourquoi elle est en écart"})
 
 
 # --------------------------------------------------------------------------- #
@@ -1169,17 +1368,18 @@ def ecran_restitution(store: CatalogueStore) -> None:
 
     st.caption(f"**{pathlib.Path(run.fichier).name}** · run `{run.run_id}` · "
                f"{run.horodatage.replace('T', ' ')}")
-    bandeau_resultat(run)
+    bandeau_resultat(run, store)
 
+    st.markdown("##### Le run en six chiffres")
     tuiles([
-        ("Contrôles exécutés", str(s_res["controles"]), "#37474F"),
+        ("Contrôles exécutés", str(s_res["controles"]), "#9AAAB8"),
         ("Sans écart", str(s_res["pass"]), "#0ca30c"),
         ("En échec", str(s_res["fail"]),
          "#d03b3b" if s_res["fail"] else "#0ca30c"),
         ("Hors périmètre", str(s_res["non_applicable"]), "#898781"),
         ("Conformité", f"{conformite:.0f} %",
          "#0ca30c" if conformite == 100 else TEINTE_MAGNITUDE),
-        ("Lignes en exception", f"{s_res['exceptions']:,}".replace(",", " "),
+        ("Lignes en exception", nombre(s_res["exceptions"]),
          "#d03b3b" if s_res["exceptions"] else "#0ca30c"),
     ])
 
@@ -1322,7 +1522,10 @@ def ecran_restitution(store: CatalogueStore) -> None:
         if rejets.empty:
             st.success("Aucune règle refusée : toutes les définitions sont saines.")
         else:
-            st.dataframe(rejets, width='stretch', hide_index=True)
+            st.dataframe(rejets.rename(columns={
+                "rule_id": "Règle", "control_name": "Nom",
+                "dataset": "Fichier", "motif": "Pourquoi elle est refusée"}),
+                width='stretch', hide_index=True)
         st.caption("Règles écartées par le validateur avant exécution : "
                    "une règle mal définie ne fait jamais échouer un contrôle.")
 
@@ -1428,7 +1631,15 @@ def main() -> None:
     store = get_store()
     st.markdown(STYLE, unsafe_allow_html=True)
     with st.sidebar:
-        st.title("🧭 DQ Compass")
+        marque, titre = st.columns([1, 2.6], vertical_alignment="center")
+        if LOGO.exists():
+            marque.image(str(LOGO))
+        else:
+            marque.markdown("<div style='font-size:38px;'>🧭</div>",
+                            unsafe_allow_html=True)
+        titre.markdown(
+            "<div style='font-size:27px;font-weight:800;letter-spacing:-.02em;"
+            "line-height:1.1;'>DQ&nbsp;Compass</div>", unsafe_allow_html=True)
         st.caption("Couche de contrôle qualité générique, pilotée par catalogue")
         utilisateur = st.text_input("Votre nom", "data.steward",
                                     help="Identifie l'auteur au journal.")

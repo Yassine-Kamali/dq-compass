@@ -185,8 +185,32 @@ def resolve_targets(template: str, params: dict, profil: list[dict]) -> list[lis
 
     if template == "FIELD_EQUALS":
         return [[params["field_a"], params["field_b"]]]
+
     if template == "DATE_ORDER":
-        return [[params["before"], params["after"]]]
+        if "before" in params and "after" in params:
+            return [[params["before"], params["after"]]]
+        # Seules les colonnes de date sont appariables : sans ce filtre,
+        # `order_status` et `payment_status` formeraient une paire parfaite au
+        # regard de leurs noms. Un motif est un filet, pas une designation.
+        dates = [c["colonne"] for c in profil if c["type"] in DATE_TYPES]
+        return apparier(dates, params.get("motif_avant", ""),
+                        params.get("motif_apres", ""))
+
+    if template == "ROW_SUM_RECONCILIATION":
+        numeriques = {c["colonne"] for c in profil if c["type"] in NUMERIC_TYPES}
+        if "total_column" in params:
+            totaux = [params["total_column"]]
+        else:
+            totaux = [n for n in par_motif(params.get("motif_total", ""))
+                      if n in numeriques]
+        if params.get("columns"):
+            parties = list(params["columns"])
+        else:
+            # Un motif est un filet, pas une designation : ce qu'il ramene de
+            # non sommable est ecarte sans faire echouer la regle.
+            parties = [n for n in par_motif(params.get("motif_parties", ""))
+                       if n in numeriques]
+        return [[t] + [p for p in parties if p != t] for t in totaux]
     if template in ("CUSTOM_EXPRESSION", "COUNT_RECONCILIATION"):
         return [[]]
     if template == "SUM_RECONCILIATION":
@@ -197,6 +221,38 @@ def resolve_targets(template: str, params: dict, profil: list[dict]) -> list[lis
     if "colonnes_motif" in params:
         return [[n] for n in par_motif(params["colonnes_motif"])]
     return []
+
+
+def _radical(nom: str, marqueur: re.Pattern) -> str:
+    """Le nom d'une colonne prive du marqueur qui l'a designee."""
+    return re.sub(r"[^a-z0-9]", "", marqueur.sub("", nom).lower())
+
+
+def apparier(noms: list[str], motif_avant: str, motif_apres: str) -> list[list[str]]:
+    """Apparie une colonne « avant » a une colonne « apres », sans les nommer.
+
+    `date_debut` et `date_fin` decrivent le meme evenement : leurs noms sont
+    identiques une fois le marqueur retire. C'est ce reste - le radical - qui
+    fait la paire. Aucun vocabulaire n'est ecrit ici : les deux marqueurs sont
+    les motifs portes par la regle, donc le catalogue reste seul a decider ce
+    qu'est un debut et ce qu'est une fin.
+
+    A defaut de radical commun, une seule colonne de chaque cote suffit a lever
+    l'ambiguite : c'est la seule paire possible.
+    """
+    if not motif_avant or not motif_apres:
+        return []
+    try:
+        avant, apres = re.compile(motif_avant), re.compile(motif_apres)
+    except re.error:
+        return []
+    debuts = [n for n in noms if avant.search(n)]
+    fins = [n for n in noms if apres.search(n) and not avant.search(n)]
+    paires = [[d, f] for d in debuts for f in fins
+              if d != f and _radical(d, avant) == _radical(f, apres)]
+    if not paires and len(debuts) == 1 and len(fins) == 1:
+        paires = [[debuts[0], fins[0]]]
+    return paires
 
 
 # --------------------------------------------------------------------------- #
@@ -231,11 +287,12 @@ def validate_control(control: dict, store: CatalogueStore,
     if errors:
         return errors
 
-    if "colonnes_motif" in params:
-        try:
-            re.compile(str(params["colonnes_motif"]))
-        except re.error as exc:
-            errors.append(f"Motif de colonnes invalide : {exc}")
+    for nom, valeur in params.items():
+        if nom == "colonnes_motif" or nom.startswith("motif_"):
+            try:
+                re.compile(str(valeur))
+            except re.error as exc:
+                errors.append(f"Motif de colonnes invalide ({nom}) : {exc}")
 
     if tid == "MATCHES_REGEX":
         try:
@@ -294,16 +351,27 @@ def applicabilite(template: str, params: dict, targets: list[list[str]],
             return "colonne(s) absente(s) du fichier : " + ", ".join(manquantes)
         return None
 
+    if template == "DATE_ORDER" and not targets and "motif_avant" in params:
+        return (f"aucune paire de dates ne correspond a "
+                f"'{params['motif_avant']}' puis '{params.get('motif_apres', '')}'")
+
     if not targets or all(not t for t in targets):
-        vise = params.get("colonnes_motif") or params.get("column") or "la cible"
+        vise = (params.get("colonnes_motif") or params.get("column")
+                or params.get("motif_total") or params.get("total_column")
+                or "la cible")
         return f"aucune colonne du fichier ne correspond a {vise}"
 
     for target in targets:
+        if template == "ROW_SUM_RECONCILIATION" and len(target) < 2:
+            return (f"'{target[0]}' n'a aucune colonne de detail a sommer dans "
+                    f"ce fichier")
         for column in target:
             if column not in presentes:
                 return f"colonne absente du fichier : '{column}'"
             typ = (colonne_du_profil(profil, column) or {}).get("type", "")
-            if template in ("RANGE", "SUM_RECONCILIATION") and typ not in NUMERIC_TYPES:
+            if (template in ("RANGE", "SUM_RECONCILIATION",
+                             "ROW_SUM_RECONCILIATION")
+                    and typ not in NUMERIC_TYPES):
                 return (f"'{column}' n'est pas numerique dans ce fichier "
                         f"(type deduit : {typ})")
             if template in ("FRESHNESS", "DATE_ORDER") and typ not in DATE_TYPES:
@@ -516,6 +584,33 @@ def ex_sum_reconciliation(df, params, target, ctx):
     return n, ko, kpi, kpi_nom, exc
 
 
+def ex_row_sum_reconciliation(df, params, target, ctx):
+    """Rapproche, sur chaque ligne, un total declare et ses composantes.
+
+    C'est la reconciliation interne a un fichier : elle ne suppose aucune
+    seconde source, seulement une convention de nommage entre la colonne de
+    total et celles du detail. Une ligne dont une composante manque n'est pas
+    testee : additionner un trou reviendrait a inventer un ecart.
+    """
+    total, parties = target[0], target[1:]
+    tolerance = float(params.get("tolerance_pct", 0.0) or 0.0)
+    declare = pd.to_numeric(df[total], errors="coerce")
+    somme = pd.to_numeric(df[parties[0]], errors="coerce")
+    for col in parties[1:]:
+        somme = somme + pd.to_numeric(df[col], errors="coerce")
+
+    testable = declare.notna() & somme.notna()
+    ecart = (declare - somme).abs()
+    marge = declare.abs() * tolerance / 100.0
+    mask = testable & (ecart > marge + 1e-9)
+    n, ko = int(testable.sum()), int(mask.sum())
+    kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
+    motif = (f"'{total}' differe de la somme de {' + '.join(parties)}"
+             + (f" au-dela de {tolerance:g} %" if tolerance else ""))
+    return n, ko, kpi, "% de lignes rapprochees", _exceptions(
+        df, mask, ctx, total, motif, total)
+
+
 def ex_count_reconciliation(df, params, target, ctx):
     ref = ctx["load_ref"](params["ref_fichier"])
     group_by = params.get("group_by")
@@ -572,6 +667,7 @@ EXECUTORS: dict[str, Callable] = {
     "DATE_ORDER": ex_date_order,
     "FRESHNESS": ex_freshness,
     "SUM_RECONCILIATION": ex_sum_reconciliation,
+    "ROW_SUM_RECONCILIATION": ex_row_sum_reconciliation,
     "COUNT_RECONCILIATION": ex_count_reconciliation,
     "CUSTOM_EXPRESSION": ex_custom_expression,
 }

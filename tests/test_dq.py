@@ -335,6 +335,47 @@ def _():
        "une regle ecrite pour les ventes couvre un inventaire sans etre modifiee")
 
 
+MOTIFS_DATES = {"motif_avant": "(?i)(^|_)(debut|start|order)(_|$)",
+                "motif_apres": "(?i)(^|_)(fin|end|ship)(_|$)"}
+
+
+@check("cibles: DATE_ORDER apparie deux dates sur leur radical commun")
+def _():
+    """`date_debut` va avec `date_fin` parce qu'il ne reste que « date » une
+    fois le marqueur retire. Aucun de ces mots n'est ecrit dans le moteur : les
+    deux marqueurs sont des parametres de la regle."""
+    profil = E.profiler(pd.DataFrame({
+        "date_debut": ["2026-01-01"], "date_fin": ["2026-01-05"],
+        "start_sejour": ["2026-01-02"], "end_sejour": ["2026-01-04"]}))
+    eq(E.resolve_targets("DATE_ORDER", MOTIFS_DATES, profil),
+       [["date_debut", "date_fin"], ["start_sejour", "end_sejour"]],
+       "chaque paire reste dans son evenement")
+
+
+@check("cibles: DATE_ORDER n apparie que des colonnes de date")
+def _():
+    """`order_status` et `payment_status` forment une paire parfaite au regard
+    de leurs seuls noms. Le type deduit est ce qui l'empeche."""
+    profil = E.profiler(pd.DataFrame({
+        "order_status": ["OUVERT"] * 3, "shipped_status": ["EXPEDIE"] * 3}))
+    eq(E.resolve_targets("DATE_ORDER", MOTIFS_DATES, profil), [],
+       "deux libelles ne sont pas deux dates")
+
+
+@check("cibles: ROW_SUM_RECONCILIATION ecarte les composantes non sommables")
+def _():
+    """Un motif est un filet, pas une designation : ce qu'il ramene de non
+    numerique est ecarte plutot que de faire echouer la regle."""
+    profil = E.profiler(pd.DataFrame({
+        "total_ttc": [120.0], "montant_ht": [100.0], "montant_tva": [20.0],
+        "montant_libelle": ["vingt"]}))
+    eq(E.resolve_targets("ROW_SUM_RECONCILIATION",
+                         {"motif_total": "(?i)(^|_)total(_|$)",
+                          "motif_parties": "(?i)^montant(_|$)"}, profil),
+       [["total_ttc", "montant_ht", "montant_tva"]],
+       "le total en tete, ses composantes chiffrees ensuite")
+
+
 # --------------------------------------------------------------------------- #
 # 2 bis. Genericite du catalogue livre
 # --------------------------------------------------------------------------- #
@@ -356,12 +397,16 @@ def _():
     eq(nommantes, [], "regles liees a un jeu de donnees particulier")
 
 
-@check("catalogue: le socle livre couvre plusieurs dimensions sans donnees")
+@check("catalogue: le socle livre couvre les six dimensions du brief")
 def _():
+    """§2.2 : les six dimensions sont le perimetre minimum. Le brief n'impose
+    aucun NOMBRE de regles - il impose cette couverture, et les 14 attributs."""
     st = CatalogueStore()
     dimensions = {c["control_type"] for c in st.active_controls()}
-    for attendue in ["Completeness", "Validity", "Uniqueness", "Timeliness"]:
-        assert attendue in dimensions, f"{attendue} absente du socle : {dimensions}"
+    manquantes = [d for d in ["Completeness", "Validity", "Uniqueness",
+                              "Consistency", "Timeliness", "Reconciliation"]
+                  if d not in dimensions]
+    eq(manquantes, [], f"dimensions sans aucune regle en service : {dimensions}")
 
 
 @check("catalogue: le socle s applique a des fichiers de metiers differents")
@@ -653,6 +698,35 @@ def _():
     n, ko, kpi, _, _ = E.ex_sum_reconciliation(df, p, ["montant"], ctx(st))
     eq((n, ko), (2, 1), "2025 couvre 90% seulement")
     eq(round(kpi, 1), 94.5, "couverture mediane")
+
+
+@check("executeur ROW_SUM_RECONCILIATION: le total faux est le seul en ecart")
+def _():
+    df = pd.DataFrame({
+        "total_ttc": [120.0, 130.0, 120.005, 50.0],
+        "montant_ht": [100.0, 100.0, 100.0, None],
+        "montant_tva": [20.0, 20.0, 20.0, 10.0],
+    })
+    st = make_store()
+    p = {"tolerance_pct": 0.01}
+    n, ko, kpi, nom, exc = E.ex_row_sum_reconciliation(
+        df, p, ["total_ttc", "montant_ht", "montant_tva"], ctx(st))
+    eq((n, ko), (3, 1), "la ligne a composante manquante n'est pas testee")
+    eq(round(kpi, 1), 66.7, "% de lignes rapprochees")
+    eq(nom, "% de lignes rapprochees", "libelle du KPI")
+    eq(exc.iloc[0]["valeur"], "130.0", "le total declare faux")
+
+
+@check("executeur ROW_SUM_RECONCILIATION: la tolerance absorbe l'arrondi")
+def _():
+    df = pd.DataFrame({"total": [100.004], "montant_a": [50.0],
+                       "montant_b": [50.0]})
+    st = make_store()
+    _, sans, _, _, _ = E.ex_row_sum_reconciliation(
+        df, {}, ["total", "montant_a", "montant_b"], ctx(st))
+    _, avec, _, _, _ = E.ex_row_sum_reconciliation(
+        df, {"tolerance_pct": 0.01}, ["total", "montant_a", "montant_b"], ctx(st))
+    eq((sans, avec), (1, 0), "sans tolerance l'ecart compte, avec il est absorbe")
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,71 @@
+# Theme DQ Compass - fond noir, quel que soit le reglage du navigateur.
+#
+# Les trois blocs disent la meme chose a trois endroits : le theme par defaut
+# (`[theme]`), et les deux variantes que le menu « Appearance » de Streamlit
+# peut selectionner. Sans le bloc `[theme.light]`, un utilisateur qui bascule en
+# clair retrouverait un fond blanc : ici, l'application reste noire dans les
+# deux cas.
+
+[theme]
+base = "dark"
+primaryColor = "#4C8DF6"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0E1114"
+textColor = "#E8ECF1"
+borderColor = "#22262E"
+dataframeBorderColor = "#22262E"
+dataframeHeaderBackgroundColor = "#12161B"
+codeBackgroundColor = "#0B0E11"
+linkColor = "#6BA4FF"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "0.55rem"
+buttonRadius = "0.55rem"
+
+[theme.sidebar]
+backgroundColor = "#07090B"
+secondaryBackgroundColor = "#12161B"
+borderColor = "#22262E"
+textColor = "#E8ECF1"
+
+[theme.light]
+primaryColor = "#4C8DF6"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0E1114"
+textColor = "#E8ECF1"
+borderColor = "#22262E"
+dataframeBorderColor = "#22262E"
+dataframeHeaderBackgroundColor = "#12161B"
+codeBackgroundColor = "#0B0E11"
+linkColor = "#6BA4FF"
+showWidgetBorder = true
+
+[theme.light.sidebar]
+backgroundColor = "#07090B"
+secondaryBackgroundColor = "#12161B"
+borderColor = "#22262E"
+textColor = "#E8ECF1"
+
+[theme.dark]
+primaryColor = "#4C8DF6"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0E1114"
+textColor = "#E8ECF1"
+borderColor = "#22262E"
+dataframeBorderColor = "#22262E"
+dataframeHeaderBackgroundColor = "#12161B"
+codeBackgroundColor = "#0B0E11"
+linkColor = "#6BA4FF"
+showWidgetBorder = true
+
+[theme.dark.sidebar]
+backgroundColor = "#07090B"
+secondaryBackgroundColor = "#12161B"
+borderColor = "#22262E"
+textColor = "#E8ECF1"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

@@ -1,4 +1,16 @@
 """Bootstrap catalogue/store.json (templates, dataset contracts, controls)."""
+# ---------------------------------------------------------------------------
+# SCRIPT HISTORIQUE - NE PLUS EXECUTER.
+#
+# Ecrit pour le schema de catalogue 1.0, quand un fichier devait etre declare
+# avant d'etre controle. Le catalogue est passe au schema 2.0 : plus aucun
+# contrat n'est declare, la structure est deduite a la lecture par
+# engine/profiler.py.
+#
+# Son effet est integralement acquis dans catalogue/store.json, et trace dans
+# le journal du catalogue. Conserve pour la provenance, pas pour l'usage.
+# ---------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import json

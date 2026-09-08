@@ -2,13 +2,15 @@
 DQ Compass engine.
 
 Reads control definitions from the catalogue store and executes them against
-any declared dataset. The engine knows no column name, no threshold and no
-dataset: everything comes from the catalogue.
+any file at all. The engine knows no column name, no threshold and no file
+structure: everything comes from the catalogue, and the structure is deduced at
+read time by engine/profiler.py.
 
-One run controls ONE file. The contract to apply is detected from the columns
-present in the file, or imposed by the caller. Reference tables are not files
-the user picks: the engine fetches them on its own when a referential
-integrity control needs one.
+One run controls ONE file. Nothing is declared beforehand: every active rule
+whose scope covers the file is attempted, and a rule whose columns are absent is
+reported NON_APPLICABLE with its reason - never as a technical error. Reference
+tables are not files the user picks: a reconciliation rule carries its own
+source path, which the engine loads and fingerprints.
 
 Execution is a three-phase pipeline, in this order and never merged:
   1. VALIDATE  - reject malformed controls before touching any data
@@ -35,6 +37,7 @@ from typing import Any, Callable
 import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from profiler import cle_candidate, profiler  # noqa: E402
 from store import CatalogueStore, load_store, scope_matches  # noqa: E402
 
 ENGINE_VERSION = "2.0.0"
@@ -149,32 +152,36 @@ def required_param_groups(params_requis: str) -> list[list[str]]:
     return groups
 
 
-def column_meta(store: CatalogueStore, dataset: str, column: str) -> dict | None:
-    return next((c for c in store.columns_of(dataset) if c["colonne"] == column), None)
+def colonne_du_profil(profil: list[dict], column: str) -> dict | None:
+    return next((c for c in profil if c["colonne"] == column), None)
 
 
 # --------------------------------------------------------------------------- #
-# Target resolution: one catalogue row can address N real columns
+# Resolution de cible : une ligne de catalogue peut viser N colonnes reelles
 # --------------------------------------------------------------------------- #
-def resolve_targets(template: str, params: dict, store: CatalogueStore,
-                    dataset: str) -> list[list[str]]:
-    """Return a list of targets; each target is a list of column names.
+def resolve_targets(template: str, params: dict, profil: list[dict]) -> list[list[str]]:
+    """Rend la liste des cibles ; chaque cible est une liste de colonnes.
 
-    A control addressed by `column` yields one single-column target.
-    A control addressed by `role` yields one target per matching column,
-    which is what makes a single catalogue row apply to any future dataset.
+    Une regle designee par `column` produit une cible d'une colonne. Une regle
+    designee par `colonnes_motif` produit une cible par colonne dont le nom
+    correspond au motif : c'est ce qui permet a une seule ligne de catalogue de
+    s'appliquer a des fichiers qui n'existent pas encore, sans rien declarer.
     """
-    cols = store.columns_of(dataset)
+    noms = [c["colonne"] for c in profil]
+
+    def par_motif(motif: str) -> list[str]:
+        try:
+            regex = re.compile(motif)
+        except re.error:
+            return []
+        return [n for n in noms if regex.search(n)]
 
     if template == "UNIQUE_KEY":
         if "columns" in params:
             return [list(params["columns"])]
-        role = params.get("role")
-        if role == "cle_primaire":
-            pk = [c["colonne"] for c in cols if str(c.get("cle_primaire", "")).upper() == "OUI"]
-            return [pk] if pk else []
-        matched = [c["colonne"] for c in cols if c.get("role") == role]
-        return [matched] if matched else []
+        if "colonnes_motif" in params:
+            return [[n] for n in par_motif(params["colonnes_motif"])]
+        return []
 
     if template == "FIELD_EQUALS":
         return [[params["field_a"], params["field_b"]]]
@@ -187,19 +194,24 @@ def resolve_targets(template: str, params: dict, store: CatalogueStore,
 
     if "column" in params:
         return [[params["column"]]]
-    if "role" in params:
-        role = params["role"]
-        if role == "cle_primaire":
-            return [[c["colonne"]] for c in cols
-                    if str(c.get("cle_primaire", "")).upper() == "OUI"]
-        return [[c["colonne"]] for c in cols if c.get("role") == role]
+    if "colonnes_motif" in params:
+        return [[n] for n in par_motif(params["colonnes_motif"])]
     return []
 
 
 # --------------------------------------------------------------------------- #
-# Phase 1 - Validation. A malformed control is rejected, never executed.
+# Phase 1 - Validation. Une regle mal definie est rejetee, jamais executee.
 # --------------------------------------------------------------------------- #
-def validate_control(control: dict, store: CatalogueStore, dataset: str) -> list[str]:
+def validate_control(control: dict, store: CatalogueStore,
+                     root: pathlib.Path = ROOT) -> list[str]:
+    """Rejette une regle mal *definie*, independamment de tout fichier.
+
+    Une regle n'est plus validee contre un schema declare : il n'y en a plus.
+    Ce qui se verifie ici tient a la regle seule : template connu et implemente,
+    parametres requis presents, expressions compilables, fichier de reference
+    atteignable. Qu'une colonne existe ou non depend du fichier controle : c'est
+    une question d'applicabilite, tranchee a l'execution.
+    """
     errors: list[str] = []
     tid = control.get("template")
     tpl = store.template(tid)
@@ -219,43 +231,11 @@ def validate_control(control: dict, store: CatalogueStore, dataset: str) -> list
     if errors:
         return errors
 
-    declared = {c["colonne"] for c in store.columns_of(dataset)}
-    if not declared:
-        return [f"Dataset '{dataset}' absent du contrat (onglet DATASETS)"]
-
-    try:
-        targets = resolve_targets(tid, params, store, dataset)
-    except KeyError as exc:
-        return [f"Parametre manquant pour la resolution de cible : {exc}"]
-
-    if not targets or all(len(t) == 0 for t in targets) and tid not in (
-            "CUSTOM_EXPRESSION", "COUNT_RECONCILIATION"):
-        errors.append(
-            f"Aucune colonne cible dans '{dataset}' pour {params.get('role') or params}")
-
-    for target in targets:
-        for column in target:
-            if column not in declared:
-                errors.append(f"Colonne '{column}' non declaree au contrat de '{dataset}'")
-                continue
-            meta = column_meta(store, dataset, column) or {}
-            ctype = str(meta.get("type", "")).lower()
-            if tid in ("RANGE", "SUM_RECONCILIATION") and ctype not in NUMERIC_TYPES:
-                errors.append(
-                    f"{tid} exige une colonne numerique ; '{column}' est declaree '{ctype}'")
-            if tid in ("FRESHNESS", "DATE_ORDER") and ctype not in DATE_TYPES:
-                errors.append(
-                    f"{tid} exige une colonne date ; '{column}' est declaree '{ctype}'")
-
-    if tid == "FOREIGN_KEY":
-        ref_ds, ref_col = params.get("ref_dataset"), params.get("ref_column")
-        if store.dataset(ref_ds) is None:
-            errors.append(f"Referentiel cible inconnu : '{ref_ds}'")
-        elif column_meta(store, ref_ds, ref_col) is None:
-            errors.append(f"Colonne '{ref_col}' non declaree au contrat de '{ref_ds}'")
-
-    if tid == "COUNT_RECONCILIATION" and store.dataset(params.get("ref_dataset")) is None:
-        errors.append(f"Dataset de reference inconnu : '{params.get('ref_dataset')}'")
+    if "colonnes_motif" in params:
+        try:
+            re.compile(str(params["colonnes_motif"]))
+        except re.error as exc:
+            errors.append(f"Motif de colonnes invalide : {exc}")
 
     if tid == "MATCHES_REGEX":
         try:
@@ -263,7 +243,73 @@ def validate_control(control: dict, store: CatalogueStore, dataset: str) -> list
         except re.error as exc:
             errors.append(f"Expression reguliere invalide : {exc}")
 
+    if tid in ("FOREIGN_KEY", "COUNT_RECONCILIATION"):
+        ref = params.get("ref_fichier")
+        if not ref:
+            errors.append("Fichier de reference non renseigne")
+        elif not (pathlib.Path(root) / str(ref)).exists():
+            errors.append(f"Fichier de reference introuvable : '{ref}'")
+
     return errors
+
+
+# Mots qui appartiennent au langage de l'expression, pas au fichier.
+MOTS_EXPRESSION = {"and", "or", "not", "in", "is", "None", "True", "False",
+                   "if", "else", "abs", "len", "str", "int", "float", "index"}
+
+
+def colonnes_d_expression(expression: str) -> set[str]:
+    """Colonnes citees par une expression sur mesure.
+
+    Les litteraux de chaine sont retires d'abord : dans
+    `DER_CURR_LEG1 == 'TO1'`, seul le premier nom designe une colonne. Les
+    identifiants precedes d'un point sont ignores : ce sont des methodes.
+    """
+    sans_chaines = re.sub(r"'[^']*'|\"[^\"]*\"", " ", str(expression or ""))
+    entre_accents = set(re.findall(r"`([^`]+)`", sans_chaines))
+    sans_accents = re.sub(r"`[^`]*`", " ", sans_chaines)
+    nus = set(re.findall(r"(?<![\w.])([A-Za-z_]\w*)", sans_accents))
+    return (entre_accents | nus) - MOTS_EXPRESSION
+
+
+def applicabilite(template: str, params: dict, targets: list[list[str]],
+                  profil: list[dict]) -> str | None:
+    """Rend la raison pour laquelle la regle ne s'applique pas a ce fichier.
+
+    Une regle hors perimetre n'est ni un echec ni une erreur technique. Les
+    separer est ce qui rend lisible la couverture de controle : sur 15 regles,
+    savoir que 9 ne concernent pas ce fichier n'a rien a voir avec 9 plantages.
+    """
+    presentes = {c["colonne"] for c in profil}
+
+    if template == "CUSTOM_EXPRESSION":
+        manquantes = sorted(colonnes_d_expression(params.get("expression")) - presentes)
+        if manquantes:
+            return "colonne(s) absente(s) du fichier : " + ", ".join(manquantes)
+        return None
+
+    if template == "COUNT_RECONCILIATION":
+        manquantes = sorted(set(params.get("group_by") or []) - presentes)
+        if manquantes:
+            return "colonne(s) absente(s) du fichier : " + ", ".join(manquantes)
+        return None
+
+    if not targets or all(not t for t in targets):
+        vise = params.get("colonnes_motif") or params.get("column") or "la cible"
+        return f"aucune colonne du fichier ne correspond a {vise}"
+
+    for target in targets:
+        for column in target:
+            if column not in presentes:
+                return f"colonne absente du fichier : '{column}'"
+            typ = (colonne_du_profil(profil, column) or {}).get("type", "")
+            if template in ("RANGE", "SUM_RECONCILIATION") and typ not in NUMERIC_TYPES:
+                return (f"'{column}' n'est pas numerique dans ce fichier "
+                        f"(type deduit : {typ})")
+            if template in ("FRESHNESS", "DATE_ORDER") and typ not in DATE_TYPES:
+                return (f"'{column}' n'est pas une date dans ce fichier "
+                        f"(type deduit : {typ})")
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -350,13 +396,13 @@ def ex_unique_key(df, params, target, ctx):
 
 def ex_foreign_key(df, params, target, ctx):
     col = target[0]
-    ref = ctx["load_dataset"](params["ref_dataset"])
+    ref = ctx["load_ref"](params["ref_fichier"])
     valid = set(ref[params["ref_column"]].dropna().astype(str))
     notna = df[col].notna()
     mask = notna & ~df[col].astype(str).isin(valid)
     n, ko = int(notna.sum()), int(mask.sum())
     kpi = round(100.0 * (n - ko) / n, 4) if n else 100.0
-    motif = f"Absent de {params['ref_dataset']}.{params['ref_column']}"
+    motif = f"Absent de {params['ref_fichier']}.{params['ref_column']}"
     return n, ko, kpi, "% de valeurs rattachees", _exceptions(df, mask, ctx, col, motif, col)
 
 
@@ -471,7 +517,7 @@ def ex_sum_reconciliation(df, params, target, ctx):
 
 
 def ex_count_reconciliation(df, params, target, ctx):
-    ref = ctx["load_dataset"](params["ref_dataset"])
+    ref = ctx["load_ref"](params["ref_fichier"])
     group_by = params.get("group_by")
     if not group_by:
         ecart = abs(len(df) - len(ref))
@@ -541,14 +587,6 @@ EXECUTORS: dict[str, Callable] = {
 FORMATS_SUPPORTES = {".csv", ".txt", ".xlsx", ".xlsm", ".xls"}
 
 
-class ContratIntrouvable(Exception):
-    """Aucun contrat du catalogue ne correspond aux colonnes du fichier."""
-
-    def __init__(self, message: str, candidats: list[tuple[str, float]]):
-        super().__init__(message)
-        self.candidats = candidats
-
-
 def charger_fichier(path: pathlib.Path | str) -> pd.DataFrame:
     """Lit un CSV ou un classeur Excel. Le format vient de l'extension."""
     path = pathlib.Path(path)
@@ -564,41 +602,23 @@ def charger_fichier(path: pathlib.Path | str) -> pd.DataFrame:
     return pd.read_csv(path, low_memory=False)
 
 
-def detecter_contrat(colonnes, store: CatalogueStore) -> list[tuple[str, float]]:
-    """Classe les contrats du catalogue par taux de recouvrement des colonnes.
+class SourceLoader:
+    """Charge les fichiers lus par un run et les empreinte.
 
-    Le score est la part des colonnes declarees au contrat que le fichier
-    contient reellement. Un fichier large ne peut donc pas matcher par hasard
-    un petit referentiel.
+    Toute source touchee - le fichier controle comme les fichiers de reference -
+    laisse ici son chemin, son SHA-256, sa taille et sa date. C'est la
+    « Dataset Reference : version / snapshot / hash » exigee par l'annexe B.2 du
+    brief, et ce qui permet de rejouer un run a l'identique.
     """
-    presentes = {str(c) for c in colonnes}
-    scores: list[tuple[str, float]] = []
-    for nom in store.datasets:
-        declarees = [c["colonne"] for c in store.columns_of(nom)]
-        if not declarees:
-            continue
-        trouvees = sum(1 for c in declarees if c in presentes)
-        scores.append((nom, round(trouvees / len(declarees), 4)))
-    return sorted(scores, key=lambda t: (-t[1], t[0]))
 
-
-class DatasetLoader:
-    """Charge les referentiels declares au catalogue, une fois, et les empreinte."""
-
-    def __init__(self, store: CatalogueStore, root: pathlib.Path = ROOT):
-        self.store, self.root = store, root
+    def __init__(self, root: pathlib.Path = ROOT):
+        self.root = pathlib.Path(root)
         self._cache: dict[str, pd.DataFrame] = {}
         self.hashes: dict[str, dict] = {}
 
-    def path_of(self, name: str) -> pathlib.Path:
-        definition = self.store.dataset(name)
-        if definition is None:
-            raise KeyError(f"Dataset '{name}' absent du catalogue")
-        return self.root / definition["source"]
-
-    def enregistrer(self, name: str, df: pd.DataFrame, path: pathlib.Path) -> None:
-        self._cache[name] = df
-        self.hashes[name] = {
+    def enregistrer(self, nom: str, df: pd.DataFrame, path: pathlib.Path) -> None:
+        self._cache[nom] = df
+        self.hashes[nom] = {
             "chemin": str(path).replace("\\", "/"),
             "sha256": sha256_file(path),
             "lignes": len(df),
@@ -607,21 +627,21 @@ class DatasetLoader:
                 timespec="seconds"),
         }
 
-    def load(self, name: str) -> pd.DataFrame:
-        if name in self._cache:
-            return self._cache[name]
-        path = self.path_of(name)
-        if not path.exists():
-            raise FileNotFoundError(f"Referentiel introuvable pour '{name}' : {path}")
-        df = charger_fichier(path)
-        self.enregistrer(name, df, path)
-        return df
+    def load_ref(self, chemin: str) -> pd.DataFrame:
+        """Charge un fichier de reference designe par son chemin.
 
-    def id_column(self, name: str) -> str | None:
-        for c in self.store.columns_of(name):
-            if str(c.get("cle_primaire", "")).upper() == "OUI":
-                return c["colonne"]
-        return None
+        Le chemin vient des parametres de la regle, pas d'un registre de
+        fichiers : une regle de rapprochement porte sa propre source.
+        """
+        cle = str(chemin)
+        if cle in self._cache:
+            return self._cache[cle]
+        path = self.root / cle
+        if not path.exists():
+            raise FileNotFoundError(f"Fichier de reference introuvable : {path}")
+        df = charger_fichier(path)
+        self.enregistrer(cle, df, path)
+        return df
 
 
 # --------------------------------------------------------------------------- #
@@ -633,12 +653,13 @@ def run_dq(fichier: pathlib.Path | str,
            run_label: str = "",
            write_evidence: bool = True,
            as_of: dt.date | None = None,
-           root: pathlib.Path = ROOT,
-           seuil_detection: float = 0.7) -> RunResult:
-    """Controle un fichier unique.
+           root: pathlib.Path = ROOT) -> RunResult:
+    """Controle un fichier unique, quel qu'il soit.
 
-    `dataset` nomme le contrat a appliquer. S'il est omis, le contrat est
-    detecte a partir des colonnes presentes dans le fichier.
+    Aucun contrat n'est requis et aucun n'est detecte : le fichier est profile
+    a la lecture, et chaque regle active du catalogue s'applique si les colonnes
+    qu'elle vise existent. `dataset` ne sert qu'a nommer le fichier pour le
+    ciblage par portee et pour les preuves ; a defaut, le nom du fichier suffit.
     """
     store = store or load_store()
     as_of = as_of or dt.date.today()
@@ -656,54 +677,74 @@ def run_dq(fichier: pathlib.Path | str,
     df = charger_fichier(fichier)
     log(f"Charge : {len(df):,} lignes, {len(df.columns)} colonnes")
 
-    candidats = detecter_contrat(df.columns, store)
-    if dataset is None:
-        if not candidats or candidats[0][1] < seuil_detection:
-            meilleur = f"{candidats[0][0]} ({candidats[0][1]:.0%})" if candidats else "aucun"
-            raise ContratIntrouvable(
-                f"Aucun contrat ne correspond aux colonnes de {fichier.name}. "
-                f"Meilleur candidat : {meilleur}, sous le seuil de "
-                f"{seuil_detection:.0%}. Declarez le contrat de ce fichier "
-                f"dans l'ecran Datasets.", candidats)
-        dataset = candidats[0][0]
-        log(f"Contrat detecte : {dataset} "
-            f"({dict(candidats)[dataset]:.0%} des colonnes declarees presentes)")
-    else:
-        if store.dataset(dataset) is None:
-            raise ContratIntrouvable(f"Contrat inconnu : '{dataset}'", candidats)
-        log(f"Contrat impose : {dataset} ({dict(candidats).get(dataset, 0):.0%})")
+    profil = profiler(df)
+    nom = dataset or fichier.stem
+    id_ligne = cle_candidate(profil)
+    log(f"Profil deduit : {len(profil)} colonnes | "
+        f"identifiant de ligne : {id_ligne or 'index du fichier'}")
 
-    loader = DatasetLoader(store, root)
-    loader.enregistrer(dataset, df, fichier)
+    loader = SourceLoader(root)
+    loader.enregistrer(nom, df, fichier)
     resultats: list[ControlResult] = []
     rejets: list[dict] = []
     frames: list[pd.DataFrame] = []
 
     ctx = {
-        "load_dataset": loader.load,
-        "id_column": loader.id_column(dataset),
+        "load_ref": loader.load_ref,
+        "id_column": id_ligne,
         "as_of": as_of,
         "store": store,
-        "dataset": dataset,
+        "dataset": nom,
     }
 
     applicables = [c for c in store.controls
                    if c.get("statut") == "Actif"
-                   and scope_matches(c.get("dataset_scope", ""), dataset)]
-    log(f"{len(applicables)} controle(s) actif(s) s'appliquent a ce contrat")
+                   and scope_matches(c.get("dataset_scope", ""), nom)]
+    log(f"{len(applicables)} controle(s) actif(s) dans la portee de ce fichier")
+
+    def hors_perimetre(control: dict, raison: str) -> ControlResult:
+        """Une regle qui ne concerne pas ce fichier est tracee, pas tue."""
+        return ControlResult(
+            rule_id=control["rule_id"],
+            control_name=control.get("control_name", ""),
+            dimension=control.get("control_type", ""),
+            template=control["template"],
+            dataset=nom,
+            cible="-",
+            statut="NON_APPLICABLE",
+            lignes_testees=0,
+            lignes_ko=0,
+            taux_ko_pct=0.0,
+            kpi_nom="-",
+            kpi_valeur=-1,
+            seuil_pct=float(control.get("seuil_tolerance_pct") or 0),
+            severity=control.get("severity", ""),
+            owner=control.get("owner", ""),
+            frequency=control.get("frequency", ""),
+            remediation_action=control.get("remediation_action", ""),
+            version=int(control.get("version", 1)),
+            duree_s=0.0,
+            message=raison,
+        )
 
     for control in applicables:
-        errors = validate_control(control, store, dataset)
+        errors = validate_control(control, store, root)
         if errors:
             for err in errors:
-                rejets.append({"rule_id": control["rule_id"], "dataset": dataset,
+                rejets.append({"rule_id": control["rule_id"], "dataset": nom,
                                "control_name": control.get("control_name", ""),
                                "motif": err})
             log(f"{control['rule_id']} REJETE : {errors[0]}")
             continue
 
         params = parse_params(control["params"])
-        targets = resolve_targets(control["template"], params, store, dataset)
+        targets = resolve_targets(control["template"], params, profil)
+        raison = applicabilite(control["template"], params, targets, profil)
+        if raison:
+            resultats.append(hors_perimetre(control, raison))
+            log(f"{control['rule_id']} NON_APPLICABLE : {raison}")
+            continue
+
         executor = EXECUTORS[control["template"]]
 
         for target in targets:
@@ -723,7 +764,7 @@ def run_dq(fichier: pathlib.Path | str,
                 log(f"{control['rule_id']} ERREUR : {message}")
 
             if not exc.empty:
-                exc.insert(0, "dataset", dataset)
+                exc.insert(0, "dataset", nom)
                 exc.insert(0, "rule_id", control["rule_id"])
                 exc.insert(2, "severity", control.get("severity", ""))
                 frames.append(exc)
@@ -733,7 +774,7 @@ def run_dq(fichier: pathlib.Path | str,
                 control_name=control.get("control_name", ""),
                 dimension=control.get("control_type", ""),
                 template=control["template"],
-                dataset=dataset,
+                dataset=nom,
                 cible=cible,
                 statut=statut,
                 lignes_testees=int(n),
@@ -760,7 +801,6 @@ def run_dq(fichier: pathlib.Path | str,
     catalogue_snapshot = {
         "meta": store.data.get("meta", {}),
         "templates": store.templates,
-        "datasets": store.datasets,
         "controls": store.controls,
     }
     manifeste = {
@@ -773,9 +813,9 @@ def run_dq(fichier: pathlib.Path | str,
         "pandas": pd.__version__,
         "machine": platform.node(),
         "fichier_controle": str(fichier).replace("\\", "/"),
-        "contrat_applique": dataset,
-        "detection": candidats[:5],
-        "datasets_executes": [dataset],
+        "fichier_nom": nom,
+        "profil_fichier": profil,
+        "identifiant_de_ligne": id_ligne,
         "sources": loader.hashes,
         "catalogue_sha256": sha256_obj(catalogue_snapshot),
         "controles_actifs": len(store.active_controls()),
@@ -786,14 +826,14 @@ def run_dq(fichier: pathlib.Path | str,
         run_id=run_id,
         horodatage=manifeste["horodatage"],
         libelle=run_label,
-        datasets=[dataset],
+        datasets=[nom],
         resultats=resultats,
         exceptions=exceptions,
         rejets=rejets,
         manifeste=manifeste,
         journal=journal,
         fichier=str(fichier),
-        contrat=dataset,
+        contrat=nom,
     )
     log(f"Termine en {manifeste['duree_totale_s']}s | {result.summary()}")
 
@@ -822,16 +862,8 @@ def write_evidence_pack(result: RunResult, catalogue_snapshot: dict) -> pathlib.
 
 def main(argv: list[str]) -> int:
     fichier = argv[1] if len(argv) > 1 else "data/prepared/bis_turnover.csv"
-    contrat = argv[2] if len(argv) > 2 else None
-    try:
-        res = run_dq(fichier, dataset=contrat,
-                     run_label="Execution en ligne de commande")
-    except ContratIntrouvable as exc:
-        print(f"ERREUR : {exc}")
-        print("Contrats les plus proches :")
-        for nom, score in exc.candidats[:5]:
-            print(f"  {score:6.0%}  {nom}")
-        return 2
+    nom = argv[2] if len(argv) > 2 else None
+    res = run_dq(fichier, dataset=nom, run_label="Execution en ligne de commande")
     print("\n".join(res.journal))
     print("\n--- SYNTHESE ---")
     print(json.dumps(res.summary(), indent=2))

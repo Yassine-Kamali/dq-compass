@@ -1,14 +1,14 @@
 {
   "meta": {
-    "schema": "1.0",
+    "schema": "2.0",
     "libelle": "DQ Compass - catalogue de controles",
-    "updated_at": "2026-09-08T09:54:38"
+    "updated_at": "2026-09-08T12:40:29"
   },
   "templates": [
     {
       "template_id": "NOT_NULL",
       "dimension": "Completeness",
-      "params_requis": "column | role",
+      "params_requis": "column | colonnes_motif",
       "params_optionnels": "",
       "description_logique": "Aucune valeur nulle ou vide sur la colonne ciblee",
       "kpi_produit": "% de completude",
@@ -18,17 +18,17 @@
       "explication": "Le contrôle échoue si des lignes n'ont aucune valeur dans cette colonne.",
       "exemple_metier": "Chaque opération doit porter un montant.",
       "phrase": "La colonne « {column} » doit être renseignée sur chaque ligne.",
-      "phrase_role": "Toute information de type « {role} » doit être renseignée.",
       "params_libelles": {
         "column": "Colonne qui doit toujours être remplie",
-        "role": "Type d'information concerné"
+        "colonnes_motif": "Motif des colonnes visees (ex. _id$)"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "Toute colonne dont le nom correspond à « {colonnes_motif} » doit être renseignée sur chaque ligne."
     },
     {
       "template_id": "MATCHES_REGEX",
       "dimension": "Validity",
-      "params_requis": "column, pattern",
+      "params_requis": "column | colonnes_motif, pattern",
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La valeur respecte une expression reguliere",
       "kpi_produit": "% de valeurs valides",
@@ -40,14 +40,16 @@
       "phrase": "La colonne « {column} » doit respecter le format {pattern}.",
       "params_libelles": {
         "column": "Colonne à vérifier",
-        "pattern": "Format attendu (expression régulière)"
+        "pattern": "Format attendu (expression régulière)",
+        "colonnes_motif": "Motif des colonnes visées (expression régulière sur le nom)"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "Toute colonne dont le nom correspond à « {colonnes_motif} » doit respecter le format {pattern}."
     },
     {
       "template_id": "IN_DOMAIN",
       "dimension": "Validity",
-      "params_requis": "column, values",
+      "params_requis": "column | colonnes_motif, values",
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La valeur appartient a une liste fermee",
       "kpi_produit": "% de valeurs valides",
@@ -59,14 +61,16 @@
       "phrase": "La colonne « {column} » ne peut contenir que : {values}.",
       "params_libelles": {
         "column": "Colonne à vérifier",
-        "values": "Liste des valeurs autorisées"
+        "values": "Liste des valeurs autorisées",
+        "colonnes_motif": "Motif des colonnes visées (expression régulière sur le nom)"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "Toute colonne dont le nom correspond à « {colonnes_motif} » ne peut contenir que : {values}."
     },
     {
       "template_id": "RANGE",
       "dimension": "Validity",
-      "params_requis": "column, min | max",
+      "params_requis": "column | colonnes_motif, min | max",
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La valeur numerique est comprise dans l'intervalle",
       "kpi_produit": "% de valeurs dans la plage",
@@ -79,16 +83,20 @@
       "params_libelles": {
         "column": "Colonne chiffrée à vérifier",
         "min": "Valeur minimale acceptée",
-        "max": "Valeur maximale acceptée"
+        "max": "Valeur maximale acceptée",
+        "colonnes_motif": "Motif des colonnes visées (expression régulière sur le nom)"
       },
       "niveau": "simple",
       "phrase_min": "La colonne « {column} » doit être supérieure ou égale à {min}.",
-      "phrase_max": "La colonne « {column} » doit être inférieure ou égale à {max}."
+      "phrase_max": "La colonne « {column} » doit être inférieure ou égale à {max}.",
+      "phrase_motif": "Toute colonne dont le nom correspond à « {colonnes_motif} » doit rester entre {min} et {max}.",
+      "phrase_motif_min": "Toute colonne dont le nom correspond à « {colonnes_motif} » doit être supérieure ou égale à {min}.",
+      "phrase_motif_max": "Toute colonne dont le nom correspond à « {colonnes_motif} » doit rester inférieure ou égale à {max}."
     },
     {
       "template_id": "UNIQUE_KEY",
       "dimension": "Uniqueness",
-      "params_requis": "columns | role",
+      "params_requis": "columns | colonnes_motif",
       "params_optionnels": "",
       "description_logique": "Aucun doublon sur la cle composee",
       "kpi_produit": "taux de doublons",
@@ -98,17 +106,17 @@
       "explication": "Le contrôle échoue si deux lignes portent la même valeur.",
       "exemple_metier": "Un même numéro de facture ne peut pas apparaître deux fois.",
       "phrase": "Deux lignes ne peuvent pas avoir le même « {columns} ».",
-      "phrase_role": "Les identifiants de type « {role} » doivent être uniques.",
       "params_libelles": {
         "columns": "Colonne(s) qui identifient une ligne de façon unique",
-        "role": "Type d'identifiant concerné"
+        "colonnes_motif": "Motif des colonnes visées (expression régulière sur le nom)"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "Toute colonne dont le nom correspond à « {colonnes_motif} » doit être sans doublon."
     },
     {
       "template_id": "FOREIGN_KEY",
       "dimension": "Consistency",
-      "params_requis": "column, ref_dataset, ref_column",
+      "params_requis": "column, ref_fichier, ref_column",
       "params_optionnels": "ignorer_nulls",
       "description_logique": "Toute valeur existe dans le referentiel cible (integrite referentielle)",
       "kpi_produit": "% de valeurs rattachees",
@@ -117,11 +125,11 @@
       "question_metier": "Quel code doit être reconnu par un référentiel ?",
       "explication": "Le contrôle échoue si un code du fichier est introuvable dans la table de référence.",
       "exemple_metier": "Toute devise citée doit figurer au référentiel des devises.",
-      "phrase": "Chaque « {column} » doit exister dans le référentiel « {ref_dataset} ».",
+      "phrase": "Chaque « {column} » doit exister dans le fichier de référence « {ref_fichier} ».",
       "params_libelles": {
         "column": "Colonne du fichier à rattacher",
-        "ref_dataset": "Référentiel de rattachement",
-        "ref_column": "Colonne du référentiel qui porte le code"
+        "ref_column": "Colonne du référentiel qui porte le code",
+        "ref_fichier": "Fichier de reference (chemin)"
       },
       "niveau": "simple"
     },
@@ -166,7 +174,7 @@
     {
       "template_id": "FRESHNESS",
       "dimension": "Timeliness",
-      "params_requis": "column, max_lag_days",
+      "params_requis": "column | colonnes_motif, max_lag_days",
       "params_optionnels": "",
       "description_logique": "L'observation la plus recente date de moins de N jours",
       "kpi_produit": "age maximum en jours",
@@ -178,9 +186,11 @@
       "phrase": "La donnée la plus récente de « {column} » doit dater de moins de {max_lag_days} jours.",
       "params_libelles": {
         "column": "Colonne de date à surveiller",
-        "max_lag_days": "Ancienneté maximale tolérée, en jours"
+        "max_lag_days": "Ancienneté maximale tolérée, en jours",
+        "colonnes_motif": "Motif des colonnes visées (expression régulière sur le nom)"
       },
-      "niveau": "simple"
+      "niveau": "simple",
+      "phrase_motif": "La donnée la plus récente de toute colonne dont le nom correspond à « {colonnes_motif} » doit dater de moins de {max_lag_days} jours."
     },
     {
       "template_id": "SUM_RECONCILIATION",
@@ -211,7 +221,7 @@
     {
       "template_id": "COUNT_RECONCILIATION",
       "dimension": "Reconciliation",
-      "params_requis": "ref_dataset",
+      "params_requis": "ref_fichier",
       "params_optionnels": "group_by",
       "description_logique": "Le nombre de lignes concorde avec le dataset de reference",
       "kpi_produit": "ecart en nombre de lignes",
@@ -220,10 +230,10 @@
       "question_metier": "À quel fichier le nombre de lignes doit-il correspondre ?",
       "explication": "Le contrôle échoue si les effectifs divergent entre les deux fichiers.",
       "exemple_metier": "Après un transfert, le fichier reçu doit contenir autant de lignes que le fichier envoyé.",
-      "phrase": "Le nombre de lignes doit correspondre à celui de « {ref_dataset} ».",
+      "phrase": "Le nombre de lignes doit correspondre à celui de « {ref_fichier} ».",
       "params_libelles": {
-        "ref_dataset": "Fichier de référence",
-        "group_by": "Comparer par sous-ensemble (facultatif)"
+        "group_by": "Comparer par sous-ensemble (facultatif)",
+        "ref_fichier": "Fichier de reference (chemin)"
       },
       "niveau": "avance"
     },
@@ -247,349 +257,6 @@
       "niveau": "avance"
     }
   ],
-  "datasets": {
-    "bis_turnover": {
-      "libelle": "BIS Triennial Survey - OTC derivatives turnover (format long)",
-      "source": "data/prepared/bis_turnover.csv",
-      "proprietaire": "Market Data Office",
-      "colonnes": [
-        {
-          "colonne": "observation_id",
-          "type": "string",
-          "role": "identifiant",
-          "cle_primaire": "OUI",
-          "obligatoire": "OUI",
-          "description": "Cle composee des 14 dimensions + annee",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "FREQ",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Frequence de la serie",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_TYPE",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Type de mesure",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_INSTR",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Instrument",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_RISK",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Categorie de risque",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_REP_CTY",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Pays declarant",
-          "fk_dataset": "ref_pays",
-          "fk_colonne": "code_pays"
-        },
-        {
-          "colonne": "DER_SECTOR_CPY",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Secteur de la contrepartie",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_CPC",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Pays de la contrepartie",
-          "fk_dataset": "ref_pays",
-          "fk_colonne": "code_pays"
-        },
-        {
-          "colonne": "DER_SECTOR_UDL",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Secteur du sous-jacent",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_CURR_LEG1",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Devise jambe 1",
-          "fk_dataset": "ref_devises",
-          "fk_colonne": "code_devise"
-        },
-        {
-          "colonne": "DER_CURR_LEG2",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Devise jambe 2",
-          "fk_dataset": "ref_devises",
-          "fk_colonne": "code_devise"
-        },
-        {
-          "colonne": "DER_ISSUE_MAT",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Maturite",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_RATING",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Notation ou reglement",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_EX_METHOD",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Methode d'execution",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_BASIS",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Base brute ou nette",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Instrument",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle instrument",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Risk category",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle risque",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Reporting country",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle pays declarant",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Counterparty sector",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle secteur contrepartie",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Currency leg 1",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle devise 1",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Currency leg 2",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle devise 2",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Execution method",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle methode d'execution",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Basis",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle base",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "annee",
-          "type": "integer",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Annee de l'enquete triennale",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "date_observation",
-          "type": "date",
-          "role": "date_evenement",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Fin de periode observee",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "turnover_notionnel",
-          "type": "decimal",
-          "role": "mesure",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Montant notionnel, moyenne journaliere, USD millions",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        }
-      ]
-    },
-    "ref_devises": {
-      "libelle": "Referentiel des devises",
-      "source": "data/ref/ref_devises.csv",
-      "proprietaire": "Referential Management",
-      "colonnes": [
-        {
-          "colonne": "code_devise",
-          "type": "string",
-          "role": "identifiant",
-          "cle_primaire": "OUI",
-          "obligatoire": "OUI",
-          "description": "Code devise ISO 4217 ou agregat BIS",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "libelle_devise",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Denomination de la devise",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "type",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "REEL ou AGREGAT",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        }
-      ]
-    },
-    "ref_pays": {
-      "libelle": "Referentiel des pays declarants et de contrepartie",
-      "source": "data/ref/ref_pays.csv",
-      "proprietaire": "Referential Management",
-      "colonnes": [
-        {
-          "colonne": "code_pays",
-          "type": "string",
-          "role": "identifiant",
-          "cle_primaire": "OUI",
-          "obligatoire": "OUI",
-          "description": "Code pays BIS ou agregat de zone",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "libelle_pays",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Denomination du pays",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "type",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "REEL ou AGREGAT",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        }
-      ]
-    }
-  },
   "controls": [
     {
       "rule_id": "DQ01",
@@ -599,7 +266,7 @@
       "template": "NOT_NULL",
       "params": "{\"column\": \"turnover_notionnel\"}",
       "logic_definition": "COUNT(turnover_notionnel IS NULL) = 0",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 0,
       "severity": "Critical",
@@ -608,8 +275,8 @@
       "output_type": "Exception report",
       "kpi": "% de completude",
       "remediation_action": "Rejeter la publication et redemander l'extraction a la source BIS.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -618,8 +285,8 @@
       "control_type": "Completeness",
       "description": "Tout identifiant declare au contrat doit etre renseigne.",
       "template": "NOT_NULL",
-      "params": "{\"role\": \"identifiant\"}",
-      "logic_definition": "COUNT(identifiant IS NULL) = 0",
+      "params": "{\"colonnes_motif\": \"(?i)(^|_)id$\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)(^|_)id$ » doit être renseignée sur chaque ligne.",
       "dataset_scope": "*",
       "data_element": "role=identifiant",
       "seuil_tolerance_pct": 0,
@@ -641,7 +308,7 @@
       "template": "RANGE",
       "params": "{\"column\": \"turnover_notionnel\", \"min\": 0}",
       "logic_definition": "turnover_notionnel >= 0",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -650,8 +317,8 @@
       "output_type": "Exception report",
       "kpi": "% de valeurs dans la plage",
       "remediation_action": "Escalade au Market Data Office ; verifier le signe a la source.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -662,7 +329,7 @@
       "template": "IN_DOMAIN",
       "params": "{\"column\": \"DER_BASIS\", \"values\": [\"A\", \"B\", \"C\"]}",
       "logic_definition": "DER_BASIS IN ('A','B','C')",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "DER_BASIS",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -671,8 +338,8 @@
       "output_type": "Scorecard",
       "kpi": "% de valeurs valides",
       "remediation_action": "Corriger le mapping de codification a l'ingestion.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -683,7 +350,7 @@
       "template": "MATCHES_REGEX",
       "params": "{\"column\": \"DER_CURR_LEG1\", \"pattern\": \"^([A-Z]{3}|TO1)$\"}",
       "logic_definition": "DER_CURR_LEG1 respecte ^([A-Z]{3}|TO1)$",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "DER_CURR_LEG1",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -692,8 +359,8 @@
       "output_type": "Exception report",
       "kpi": "% de valeurs valides",
       "remediation_action": "Normaliser le code ou l'ajouter au referentiel apres arbitrage.",
-      "statut": "Actif",
-      "version": 3,
+      "statut": "Deprecie",
+      "version": 5,
       "effective_from": "2026-09-08"
     },
     {
@@ -704,7 +371,7 @@
       "template": "RANGE",
       "params": "{\"column\": \"annee\", \"min\": 1986, \"max\": 2022}",
       "logic_definition": "annee BETWEEN 1986 AND 2022",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "annee",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -713,8 +380,8 @@
       "output_type": "Scorecard",
       "kpi": "% de valeurs dans la plage",
       "remediation_action": "Etendre la borne haute a chaque nouvelle vague d'enquete.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -723,7 +390,7 @@
       "control_type": "Uniqueness",
       "description": "Aucune cle primaire declaree ne doit apparaitre deux fois.",
       "template": "UNIQUE_KEY",
-      "params": "{\"role\": \"cle_primaire\"}",
+      "params": "{\"columns\": [\"observation_id\"]}",
       "logic_definition": "COUNT(*) = COUNT(DISTINCT cle_primaire)",
       "dataset_scope": "*",
       "data_element": "role=cle_primaire",
@@ -734,9 +401,9 @@
       "output_type": "Exception report",
       "kpi": "taux de doublons",
       "remediation_action": "Dedoublonner a la preparation et tracer la ligne ecartee.",
-      "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "statut": "Deprecie",
+      "version": 3,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ08",
@@ -744,9 +411,9 @@
       "control_type": "Consistency",
       "description": "Toute devise declaree doit exister dans le referentiel devises.",
       "template": "FOREIGN_KEY",
-      "params": "{\"column\": \"DER_CURR_LEG1\", \"ref_dataset\": \"ref_devises\", \"ref_column\": \"code_devise\"}",
+      "params": "{\"column\": \"DER_CURR_LEG1\", \"ref_column\": \"code_devise\", \"ref_fichier\": \"data/ref/ref_devises.csv\"}",
       "logic_definition": "DER_CURR_LEG1 IN (SELECT code_devise FROM ref_devises)",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "DER_CURR_LEG1",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -755,8 +422,8 @@
       "output_type": "Exception report",
       "kpi": "% de valeurs rattachees",
       "remediation_action": "Arbitrage Data Steward : enrichir le referentiel ou rejeter la ligne.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -765,9 +432,9 @@
       "control_type": "Consistency",
       "description": "Toute devise declaree doit exister dans le referentiel devises.",
       "template": "FOREIGN_KEY",
-      "params": "{\"column\": \"DER_CURR_LEG2\", \"ref_dataset\": \"ref_devises\", \"ref_column\": \"code_devise\"}",
+      "params": "{\"column\": \"DER_CURR_LEG2\", \"ref_column\": \"code_devise\", \"ref_fichier\": \"data/ref/ref_devises.csv\"}",
       "logic_definition": "DER_CURR_LEG2 IN (SELECT code_devise FROM ref_devises)",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "DER_CURR_LEG2",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -776,8 +443,8 @@
       "output_type": "Exception report",
       "kpi": "% de valeurs rattachees",
       "remediation_action": "Arbitrage Data Steward : enrichir le referentiel ou rejeter la ligne.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -786,9 +453,9 @@
       "control_type": "Consistency",
       "description": "Tout pays declarant doit exister dans le referentiel pays.",
       "template": "FOREIGN_KEY",
-      "params": "{\"column\": \"DER_REP_CTY\", \"ref_dataset\": \"ref_pays\", \"ref_column\": \"code_pays\"}",
+      "params": "{\"column\": \"DER_REP_CTY\", \"ref_column\": \"code_pays\", \"ref_fichier\": \"data/ref/ref_pays.csv\"}",
       "logic_definition": "DER_REP_CTY IN (SELECT code_pays FROM ref_pays)",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "DER_REP_CTY",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -797,8 +464,8 @@
       "output_type": "Exception report",
       "kpi": "% de valeurs rattachees",
       "remediation_action": "Arbitrage Data Steward : enrichir le referentiel ou rejeter la ligne.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -809,7 +476,7 @@
       "template": "CUSTOM_EXPRESSION",
       "params": "{\"expression\": \"(DER_CURR_LEG1 != DER_CURR_LEG2) or (DER_CURR_LEG1 == 'TO1')\", \"description_metier\": \"Hors totaux, les deux jambes different\"}",
       "logic_definition": "DER_CURR_LEG1 <> DER_CURR_LEG2 OU DER_CURR_LEG1 = 'TO1'",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "DER_CURR_LEG1, DER_CURR_LEG2",
       "seuil_tolerance_pct": 0.5,
       "severity": "Medium",
@@ -818,8 +485,8 @@
       "output_type": "Exception report",
       "kpi": "% de lignes conformes",
       "remediation_action": "Verifier la paire a la source ; requalifier en total si agregat.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -830,7 +497,7 @@
       "template": "FRESHNESS",
       "params": "{\"column\": \"date_observation\", \"max_lag_days\": 1460}",
       "logic_definition": "MAX(date_observation) >= AUJOURDHUI - 1460 jours",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "date_observation",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -839,8 +506,8 @@
       "output_type": "Scorecard",
       "kpi": "age maximum en jours",
       "remediation_action": "Declencher l'integration de la vague d'enquete suivante.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -851,7 +518,7 @@
       "template": "SUM_RECONCILIATION",
       "params": "{\"amount\": \"turnover_notionnel\", \"total_column\": \"DER_REP_CTY\", \"total_value\": \"5J\", \"group_by\": [\"annee\", \"DER_INSTR\", \"DER_RISK\", \"DER_SECTOR_CPY\", \"DER_CPC\", \"DER_CURR_LEG1\", \"DER_CURR_LEG2\", \"DER_ISSUE_MAT\", \"DER_RATING\", \"DER_EX_METHOD\", \"DER_BASIS\"], \"sens\": \"parties_max\", \"tolerance_pct\": 0.1}",
       "logic_definition": "SUM(pays declarants) <= total 5J + 0.1%",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 0,
       "severity": "Critical",
@@ -860,8 +527,8 @@
       "output_type": "Exception report",
       "kpi": "depassement maximal %",
       "remediation_action": "Blocage : investiguer le double comptage avec le Market Data Office avant publication.",
-      "statut": "Actif",
-      "version": 3,
+      "statut": "Deprecie",
+      "version": 5,
       "effective_from": "2026-09-08"
     },
     {
@@ -872,7 +539,7 @@
       "template": "NOT_NULL",
       "params": "{\"column\": \"libelle_devise\"}",
       "logic_definition": "COUNT(libelle_devise IS NULL) = 0",
-      "dataset_scope": "ref_devises",
+      "dataset_scope": "*",
       "data_element": "libelle_devise",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -881,9 +548,9 @@
       "output_type": "Scorecard",
       "kpi": "% de completude",
       "remediation_action": "Completer le libelle depuis la source ISO 4217.",
-      "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "statut": "Deprecie",
+      "version": 3,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ15",
@@ -893,7 +560,7 @@
       "template": "FRESHNESS",
       "params": "{\"column\": \"date_observation\", \"max_lag_days\": 365}",
       "logic_definition": "MAX(date_observation) >= AUJOURDHUI - 365 jours",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "date_observation",
       "seuil_tolerance_pct": 0,
       "severity": "Low",
@@ -903,8 +570,8 @@
       "kpi": "age maximum en jours",
       "remediation_action": "Sans objet - controle deprecie le 2026-09-07.",
       "statut": "Deprecie",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ16",
@@ -914,7 +581,7 @@
       "template": "SUM_RECONCILIATION",
       "params": "{\"amount\": \"turnover_notionnel\", \"total_column\": \"DER_REP_CTY\", \"total_value\": \"5J\", \"group_by\": [\"annee\", \"DER_INSTR\", \"DER_RISK\", \"DER_SECTOR_CPY\", \"DER_CPC\", \"DER_CURR_LEG1\", \"DER_CURR_LEG2\", \"DER_ISSUE_MAT\", \"DER_RATING\", \"DER_EX_METHOD\", \"DER_BASIS\"], \"sens\": \"couverture_min\", \"couverture_min_pct\": 95.0}",
       "logic_definition": "SUM(pays declarants) / total 5J >= 95%",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 20,
       "severity": "Medium",
@@ -923,8 +590,8 @@
       "output_type": "Scorecard",
       "kpi": "couverture mediane %",
       "remediation_action": "Documenter les juridictions non publiees dans la note methodologique accompagnant la diffusion.",
-      "statut": "Actif",
-      "version": 2,
+      "statut": "Deprecie",
+      "version": 4,
       "effective_from": "2026-09-08"
     },
     {
@@ -935,7 +602,7 @@
       "template": "NOT_NULL",
       "params": "{\"column\": \"annee\"}",
       "logic_definition": "",
-      "dataset_scope": "bis_turnover",
+      "dataset_scope": "*",
       "data_element": "annee",
       "seuil_tolerance_pct": 0.9,
       "severity": "Medium",
@@ -944,6 +611,153 @@
       "output_type": "Exception report",
       "kpi": "% de completude",
       "remediation_action": "",
+      "statut": "Deprecie",
+      "version": 3,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ18",
+      "control_name": "Unicité des identifiants techniques de ligne",
+      "control_type": "Uniqueness",
+      "description": "Une colonne nommée selon la convention d'un identifiant technique de ligne désigne une clé : deux lignes ne peuvent pas la partager.",
+      "template": "UNIQUE_KEY",
+      "params": "{\"colonnes_motif\": \"(?i)^(row_?id|record_?id|uuid|guid)$\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)^(row_?id|record_?id|uuid|guid)$ » doit être sans doublon.",
+      "dataset_scope": "*",
+      "data_element": "(?i)^(row_?id|record_?id|uuid|guid)$",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "High",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "taux de doublons",
+      "remediation_action": "Dédoublonner à la source et vérifier la clé de génération.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ19",
+      "control_name": "Format des codes devise (ISO 4217)",
+      "control_type": "Validity",
+      "description": "Une colonne qui annonce un code devise doit porter un code ISO 4217 : trois lettres majuscules. Le motif exclut volontairement les colonnes de libellé.",
+      "template": "MATCHES_REGEX",
+      "params": "{\"colonnes_motif\": \"(?i)^(?!.*(libell|label|nom|name|desc))(code[_-]?(devise|currency)|(devise|currency)[_-]?code)$\", \"pattern\": \"^[A-Z]{3}$\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)^(?!.*(libell|label|nom|name|desc))(code[_-]?(devise|currency)|(devise|currency)[_-]?code)$ » doit respecter le format ^[A-Z]{3}$.",
+      "dataset_scope": "*",
+      "data_element": "(?i)^(?!.*(libell|label|nom|name|desc))(code[_-]?(devise|currency)|(devise|currency)[_-]?code)$",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs valides",
+      "remediation_action": "Rattacher la valeur à un code ISO 4217, ou documenter la convention locale et adapter le format attendu.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ20",
+      "control_name": "Format des codes pays (ISO 3166-1)",
+      "control_type": "Validity",
+      "description": "Une colonne de code pays doit porter un code ISO 3166-1 alpha-2 : deux lettres majuscules.",
+      "template": "MATCHES_REGEX",
+      "params": "{\"colonnes_motif\": \"(?i)(^|_)(pays|country)(_?code)?$\", \"pattern\": \"^[A-Z]{2}$\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)(^|_)(pays|country)(_?code)?$ » doit respecter le format ^[A-Z]{2}$.",
+      "dataset_scope": "*",
+      "data_element": "(?i)(^|_)(pays|country)(_?code)?$",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs valides",
+      "remediation_action": "Corriger le code pays à la source.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ21",
+      "control_name": "Montants et quantités jamais négatifs",
+      "control_type": "Validity",
+      "description": "Une grandeur qui mesure une quantité, un prix ou un montant ne peut pas être négative sans justification. Un signe négatif isolé trahit presque toujours une erreur de saisie ou d'inversion.",
+      "template": "RANGE",
+      "params": "{\"colonnes_motif\": \"(?i)(montant|amount|quantit|prix|price|cost|cout|total|solde|valeur|value)\", \"min\": 0}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)(montant|amount|quantit|prix|price|cost|cout|total|solde|valeur|value) » doit être supérieure ou égale à 0.",
+      "dataset_scope": "*",
+      "data_element": "(?i)(montant|amount|quantit|prix|price|cost|cout|total|solde|valeur|value)",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs dans la plage",
+      "remediation_action": "Instruire chaque valeur négative : erreur de signe, avoir légitime, ou correction à la source.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ22",
+      "control_name": "Pourcentages compris entre 0 et 100",
+      "control_type": "Validity",
+      "description": "Une colonne qui annonce un pourcentage doit rester dans l'intervalle 0–100.",
+      "template": "RANGE",
+      "params": "{\"colonnes_motif\": \"(?i)(_pct$|_percent|pourcentage|^taux|_taux$)\", \"min\": 0, \"max\": 100}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)(_pct$|_percent|pourcentage|^taux|_taux$) » doit rester entre 0 et 100.",
+      "dataset_scope": "*",
+      "data_element": "(?i)(_pct$|_percent|pourcentage|^taux|_taux$)",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs dans la plage",
+      "remediation_action": "Vérifier l'unité : un taux exprimé en fraction (0–1) ou au-delà de 100 signale une conversion manquée.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ23",
+      "control_name": "Adresses e-mail au bon format",
+      "control_type": "Validity",
+      "description": "Une adresse électronique mal formée rend toute notification inopérante et fausse les rapprochements.",
+      "template": "MATCHES_REGEX",
+      "params": "{\"colonnes_motif\": \"(?i)(e[_-]?mail|courriel)\", \"pattern\": \"^[^@\\\\s]+@[^@\\\\s]+\\\\.[A-Za-z]{2,}$\"}",
+      "logic_definition": "Toute colonne dont le nom correspond à « (?i)(e[_-]?mail|courriel) » doit respecter le format ^[^@\\s]+@[^@\\s]+\\.[A-Za-z]{2,}$.",
+      "dataset_scope": "*",
+      "data_element": "(?i)(e[_-]?mail|courriel)",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de valeurs valides",
+      "remediation_action": "Corriger l'adresse à la source.",
+      "statut": "Actif",
+      "version": 1,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ24",
+      "control_name": "Fraîcheur de la dernière mise à jour",
+      "control_type": "Timeliness",
+      "description": "Une colonne d'horodatage de mise à jour permet de détecter un flux qui se tarit : la donnée la plus récente ne doit pas être trop ancienne.",
+      "template": "FRESHNESS",
+      "params": "{\"colonnes_motif\": \"(?i)(last[_-]?update|updated[_-]?at|date[_-]?maj|_maj$)\", \"max_lag_days\": 365}",
+      "logic_definition": "La donnée la plus récente de toute colonne dont le nom correspond à « (?i)(last[_-]?update|updated[_-]?at|date[_-]?maj|_maj$) » doit dater de moins de 365 jours.",
+      "dataset_scope": "*",
+      "data_element": "(?i)(last[_-]?update|updated[_-]?at|date[_-]?maj|_maj$)",
+      "seuil_tolerance_pct": 0.0,
+      "severity": "Medium",
+      "frequency": "A la demande",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "age maximum en jours",
+      "remediation_action": "Vérifier que l'alimentation du fichier n'est pas interrompue.",
       "statut": "Actif",
       "version": 1,
       "effective_from": "2026-09-08"
@@ -1539,6 +1353,856 @@
       "avant": "bis_turnover_demo",
       "apres": "bis_turnover",
       "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T10:47:50",
+      "utilisateur": "migration",
+      "action": "MIGRATION",
+      "rule_id": "-",
+      "champ": "catalogue",
+      "avant": "3 datasets declares",
+      "apres": "profilage automatique",
+      "motif": "Suppression des contrats declares : le fichier est profile a l'execution"
+    },
+    {
+      "timestamp": "2026-09-08T10:47:50",
+      "utilisateur": "migration",
+      "action": "MIGRATION",
+      "rule_id": "DQ02",
+      "champ": "catalogue",
+      "avant": "{'role': 'identifiant'}",
+      "apres": "{'colonnes_motif': '(?i)(^|_)id$'}",
+      "motif": "Suppression des contrats declares : le fichier est profile a l'execution"
+    },
+    {
+      "timestamp": "2026-09-08T10:47:50",
+      "utilisateur": "migration",
+      "action": "MIGRATION",
+      "rule_id": "DQ07",
+      "champ": "catalogue",
+      "avant": "{'role': 'cle_primaire'}",
+      "apres": "{'columns': ['observation_id']}",
+      "motif": "Suppression des contrats declares : le fichier est profile a l'execution"
+    },
+    {
+      "timestamp": "2026-09-08T10:47:50",
+      "utilisateur": "migration",
+      "action": "MIGRATION",
+      "rule_id": "DQ08",
+      "champ": "catalogue",
+      "avant": "{'column': 'DER_CURR_LEG1', 'ref_dataset': 'ref_devises', 'ref_column': 'code_devise'}",
+      "apres": "{'column': 'DER_CURR_LEG1', 'ref_column': 'code_devise', 'ref_fichier': 'data/ref/ref_devises.csv'}",
+      "motif": "Suppression des contrats declares : le fichier est profile a l'execution"
+    },
+    {
+      "timestamp": "2026-09-08T10:47:50",
+      "utilisateur": "migration",
+      "action": "MIGRATION",
+      "rule_id": "DQ09",
+      "champ": "catalogue",
+      "avant": "{'column': 'DER_CURR_LEG2', 'ref_dataset': 'ref_devises', 'ref_column': 'code_devise'}",
+      "apres": "{'column': 'DER_CURR_LEG2', 'ref_column': 'code_devise', 'ref_fichier': 'data/ref/ref_devises.csv'}",
+      "motif": "Suppression des contrats declares : le fichier est profile a l'execution"
+    },
+    {
+      "timestamp": "2026-09-08T10:47:50",
+      "utilisateur": "migration",
+      "action": "MIGRATION",
+      "rule_id": "DQ10",
+      "champ": "catalogue",
+      "avant": "{'column': 'DER_REP_CTY', 'ref_dataset': 'ref_pays', 'ref_column': 'code_pays'}",
+      "apres": "{'column': 'DER_REP_CTY', 'ref_column': 'code_pays', 'ref_fichier': 'data/ref/ref_pays.csv'}",
+      "motif": "Suppression des contrats declares : le fichier est profile a l'execution"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ01",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ01",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ03",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ03",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ04",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ04",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ05",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ05",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ06",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ06",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ07",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ07",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ08",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ08",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ09",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ09",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ10",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ10",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ11",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ11",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ12",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ12",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ13",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ13",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ14",
+      "champ": "dataset_scope",
+      "avant": "ref_devises",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ14",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ15",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ15",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ16",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ16",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ17",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover*",
+      "apres": "*",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T11:47:46",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ17",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Portee ouverte a tout fichier : l'applicabilite est decidee par la presence des colonnes, pas par le nom du fichier"
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ01",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ01",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ03",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ03",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ04",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ04",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ05",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ05",
+      "champ": "version",
+      "avant": "4",
+      "apres": "5",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ06",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ06",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ07",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ07",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ08",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ08",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ09",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ09",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ10",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ10",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ11",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ11",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ12",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ12",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ13",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ13",
+      "champ": "version",
+      "avant": "4",
+      "apres": "5",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ14",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ14",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ16",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ16",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "MODIFICATION",
+      "rule_id": "DQ17",
+      "champ": "statut",
+      "avant": "Actif",
+      "apres": "Deprecie",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "VERSION",
+      "rule_id": "DQ17",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Règle propre au jeu de données BIS : elle nomme des colonnes qui n'existent que dans ce fichier. Le catalogue doit rester générique (brief, annexe A.4)."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ18",
+      "champ": "*",
+      "avant": "",
+      "apres": "Unicité des identifiants techniques de ligne",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ19",
+      "champ": "*",
+      "avant": "",
+      "apres": "Format des codes devise (ISO 4217)",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ20",
+      "champ": "*",
+      "avant": "",
+      "apres": "Format des codes pays (ISO 3166-1)",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ21",
+      "champ": "*",
+      "avant": "",
+      "apres": "Montants et quantités jamais négatifs",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ22",
+      "champ": "*",
+      "avant": "",
+      "apres": "Pourcentages compris entre 0 et 100",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ23",
+      "champ": "*",
+      "avant": "",
+      "apres": "Adresses e-mail au bon format",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:03:17",
+      "utilisateur": "migration",
+      "action": "CREATION",
+      "rule_id": "DQ24",
+      "champ": "*",
+      "avant": "",
+      "apres": "Fraîcheur de la dernière mise à jour",
+      "motif": "Socle générique : la règle ne nomme aucune colonne, seulement une convention de nommage."
+    },
+    {
+      "timestamp": "2026-09-08T12:23:45",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "DQ25",
+      "champ": "*",
+      "avant": "",
+      "apres": "Complétude_ID",
+      "motif": "Création via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:33:16",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ25",
+      "champ": "params",
+      "avant": "{\"column\": \"site_id\"}",
+      "apres": "{\"column\": \"order_id\"}",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:33:16",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ25",
+      "champ": "logic_definition",
+      "avant": "La colonne « site_id » doit être renseignée sur chaque ligne.",
+      "apres": "La colonne « order_id » doit être renseignée sur chaque ligne.",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:33:16",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ25",
+      "champ": "data_element",
+      "avant": "site_id",
+      "apres": "order_id",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:33:16",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ25",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:35:07",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ25",
+      "champ": "seuil_tolerance_pct",
+      "avant": "0.9",
+      "apres": "1.0",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:35:07",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ25",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:36:03",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ25",
+      "champ": "seuil_tolerance_pct",
+      "avant": "1.0",
+      "apres": "0.0",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:36:03",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ25",
+      "champ": "version",
+      "avant": "3",
+      "apres": "4",
+      "motif": "Modification via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T12:40:29",
+      "utilisateur": "data.steward",
+      "action": "SUPPRESSION",
+      "rule_id": "DQ25",
+      "champ": "*",
+      "avant": "{\"rule_id\": \"DQ25\", \"control_name\": \"Complétude_ID\", \"control_type\": \"Completeness\", \"description\": \"pour vérifier le vide\", \"template\": \"NOT_NULL\", \"params\": \"{\\\"column\\\": \\\"order_id\\\"}\", \"logic_definition\": \"La colonne « order_id » doit être renseignée sur chaque ligne.\", \"dataset_scope\": \"*\", \"data_element\": \"order_id\", \"seuil_tolerance_pct\": 0.0, \"severity\": \"Critical\", \"frequency\": \"Trimestrielle\", \"owner\": \"Data Steward\", \"output_type\": \"Exception report\", \"kpi\": \"% de completude\", \"remediation_action\": \"Rien juste prévénir\", \"statut\": \"Actif\", \"version\": 4, \"effective_from\": \"2026-09-08\"}",
+      "apres": "",
+      "motif": "C'était un test"
     }
   ]
 }

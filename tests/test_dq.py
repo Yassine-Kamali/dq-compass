@@ -3,8 +3,8 @@ Harnais de test DQ Compass. Aucune dependance externe : lancez simplement
 
     .venv/Scripts/python.exe tests/test_dq.py
 
-Couvre les quatre couches : store (gouvernance), validateur, exécuteurs,
-moteur bout en bout, rapport Excel, et le rendu des quatre écrans Streamlit.
+Couvre les couches : store (gouvernance), profilage, validateur, exécuteurs,
+moteur bout en bout, rapport Excel, et le rendu des trois écrans Streamlit.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "engine"))
 sys.path.insert(0, str(ROOT / "reporting"))
 
 import dq_engine as E  # noqa: E402
+import suggestions as S  # noqa: E402
 from excel_report import build_workbook  # noqa: E402
 from store import (CatalogueStore, libelle_severite,  # noqa: E402
                    phrase_controle)
@@ -58,11 +59,11 @@ TMP = pathlib.Path(tempfile.mkdtemp(prefix="dq_tests_"))
 
 def make_store() -> CatalogueStore:
     st = CatalogueStore(TMP / "store.json")
-    st.data = {"meta": {"schema": "1.0"}, "templates": [], "datasets": {},
+    st.data = {"meta": {"schema": "2.0"}, "templates": [],
                "controls": [], "changelog": []}
     st.data["templates"] = [
         {"template_id": "NOT_NULL", "dimension": "Completeness",
-         "params_requis": "column | role", "params_optionnels": "",
+         "params_requis": "column | colonnes_motif", "params_optionnels": "",
          "description_logique": "", "kpi_produit": "%", "exemple_params": ""},
         {"template_id": "RANGE", "dimension": "Validity",
          "params_requis": "column, min | max", "params_optionnels": "",
@@ -71,41 +72,15 @@ def make_store() -> CatalogueStore:
          "params_requis": "column, pattern", "params_optionnels": "",
          "description_logique": "", "kpi_produit": "%", "exemple_params": ""},
         {"template_id": "FOREIGN_KEY", "dimension": "Consistency",
-         "params_requis": "column, ref_dataset, ref_column", "params_optionnels": "",
+         "params_requis": "column, ref_fichier, ref_column", "params_optionnels": "",
          "description_logique": "", "kpi_produit": "%", "exemple_params": ""},
         {"template_id": "FRESHNESS", "dimension": "Timeliness",
          "params_requis": "column, max_lag_days", "params_optionnels": "",
          "description_logique": "", "kpi_produit": "j", "exemple_params": ""},
         {"template_id": "UNIQUE_KEY", "dimension": "Uniqueness",
-         "params_requis": "columns | role", "params_optionnels": "",
+         "params_requis": "columns | colonnes_motif", "params_optionnels": "",
          "description_logique": "", "kpi_produit": "%", "exemple_params": ""},
     ]
-    st.data["datasets"] = {
-        "ventes": {
-            "libelle": "Ventes de test", "source": "data/ventes.csv",
-            "proprietaire": "Test",
-            "colonnes": [
-                {"colonne": "vente_id", "type": "string", "role": "identifiant",
-                 "cle_primaire": "OUI", "obligatoire": "OUI", "description": "",
-                 "fk_dataset": "", "fk_colonne": ""},
-                {"colonne": "devise", "type": "string", "role": "code",
-                 "cle_primaire": "NON", "obligatoire": "OUI", "description": "",
-                 "fk_dataset": "ref_dev", "fk_colonne": "code"},
-                {"colonne": "montant", "type": "decimal", "role": "mesure",
-                 "cle_primaire": "NON", "obligatoire": "OUI", "description": "",
-                 "fk_dataset": "", "fk_colonne": ""},
-                {"colonne": "date_vente", "type": "date", "role": "date_evenement",
-                 "cle_primaire": "NON", "obligatoire": "OUI", "description": "",
-                 "fk_dataset": "", "fk_colonne": ""},
-            ]},
-        "ref_dev": {
-            "libelle": "Devises de test", "source": "data/ref_dev.csv",
-            "proprietaire": "Test",
-            "colonnes": [
-                {"colonne": "code", "type": "string", "role": "identifiant",
-                 "cle_primaire": "OUI", "obligatoire": "OUI", "description": "",
-                 "fk_dataset": "", "fk_colonne": ""}]},
-    }
     return st
 
 
@@ -116,10 +91,30 @@ VENTES = pd.DataFrame({
     "date_vente": ["2026-01-01", "2026-06-30", "2026-06-30", "2026-06-30", "2026-06-30"],
 })
 REF_DEV = pd.DataFrame({"code": ["EUR", "USD"]})
+REF_DEV_CSV = TMP / "ref_dev.csv"
+REF_DEV.to_csv(REF_DEV_CSV, index=False)
+
+# Le profil remplace le contrat declare : il est deduit du DataFrame lui-meme.
+PROFIL_VENTES = E.profiler(VENTES)
+
+
+def store_bis() -> CatalogueStore:
+    """Catalogue avec les regles propres au jeu BIS remises en service.
+
+    Le catalogue livre ne contient que des regles generiques : celles qui
+    nomment `turnover_notionnel` ou `DER_CURR_LEG2` sont conservees mais hors
+    service. Les tests bout en bout de ce jeu de donnees les reactivent ici, en
+    memoire uniquement - rien n'est ecrit sur disque.
+    """
+    st = CatalogueStore()
+    for c in st.controls:
+        if c["statut"] == "Deprecie":
+            c["statut"] = "Actif"
+    return st
 
 
 def ctx(store: CatalogueStore, as_of="2026-09-07") -> dict:
-    return {"load_dataset": lambda n: REF_DEV if n == "ref_dev" else VENTES,
+    return {"load_ref": lambda chemin: REF_DEV,
             "id_column": "vente_id", "as_of": dt.date.fromisoformat(as_of),
             "store": store, "dataset": "ventes"}
 
@@ -168,16 +163,43 @@ def _():
     eq(entry["apres"], "High", "valeur apres")
 
 
-@check("store: la suppression est interdite")
+@check("store: une suppression exige un motif")
 def _():
     st = make_store()
-    st.add_control({"control_name": "T", "template": "NOT_NULL",
-                    "params": '{"column": "montant"}'}, "y")
+    st.add_control({"rule_id": "DQX1", "control_name": "A supprimer",
+                    "template": "NOT_NULL", "params": '{"column": "montant"}'}, "u")
     try:
-        st.delete_control("DQ01")
-    except PermissionError:
+        st.delete_control("DQX1", "u", "   ")
+    except ValueError:
         return
-    raise AssertionError("La suppression aurait du etre refusee")
+    raise AssertionError("une suppression sans motif aurait du etre refusee")
+
+
+@check("store: une regle supprimee laisse sa definition complete au journal")
+def _():
+    """La suppression est possible parce que rien ne se perd : le journal garde
+    la definition, et chaque pack de preuves embarque le catalogue du moment."""
+    st = make_store()
+    st.add_control({"rule_id": "DQX2", "control_name": "Doublon a retirer",
+                    "template": "NOT_NULL", "params": '{"column": "montant"}'}, "u")
+    st.delete_control("DQX2", "claire", "fait double emploi avec DQX1")
+    eq(st.control("DQX2"), None, "la regle a quitte le catalogue")
+    traces = [e for e in st.changelog if e["action"] == "SUPPRESSION"]
+    eq(len(traces), 1, "la suppression est journalisee")
+    assert "Doublon a retirer" in traces[0]["avant"], \
+        "la definition complete doit rester lisible au journal"
+    eq(traces[0]["motif"], "fait double emploi avec DQX1", "motif conserve")
+    eq(traces[0]["utilisateur"], "claire", "auteur conserve")
+
+
+@check("store: supprimer une regle inconnue est refuse")
+def _():
+    st = make_store()
+    try:
+        st.delete_control("DQ404", "u", "motif")
+    except ValueError:
+        return
+    raise AssertionError("une regle inconnue ne peut pas etre supprimee")
 
 
 @check("store: suspendre retire des controles actifs sans perdre la definition")
@@ -217,29 +239,34 @@ def _():
     assert any("pattern" in e for e in errs), errs
 
 
-@check("validateur: colonne non declaree au contrat rejetee")
+def _raison(template: str, params: dict, profil=None) -> str | None:
+    """Pose au profil la question : cette regle concerne-t-elle ce fichier ?"""
+    profil = PROFIL_VENTES if profil is None else profil
+    cibles = E.resolve_targets(template, params, profil)
+    return E.applicabilite(template, params, cibles, profil)
+
+
+@check("applicabilite: une colonne absente du fichier met la regle hors perimetre")
 def _():
-    st = make_store()
-    errs = E.validate_control(
-        {"template": "NOT_NULL", "params": '{"column": "colonne_fantome"}'}, st, "ventes")
-    assert any("non declaree" in e for e in errs), errs
+    raison = _raison("NOT_NULL", {"column": "colonne_fantome"})
+    assert raison and "absente" in raison, raison
 
 
-@check("validateur: type incompatible rejete (RANGE sur une colonne texte)")
+@check("applicabilite: RANGE sur une colonne texte met la regle hors perimetre")
 def _():
-    st = make_store()
-    errs = E.validate_control(
-        {"template": "RANGE", "params": '{"column": "devise", "min": 0}'}, st, "ventes")
-    assert any("numerique" in e for e in errs), errs
+    raison = _raison("RANGE", {"column": "devise", "min": 0})
+    assert raison and "numerique" in raison, raison
 
 
-@check("validateur: type incompatible rejete (FRESHNESS sur une mesure)")
+@check("applicabilite: FRESHNESS sur une mesure met la regle hors perimetre")
 def _():
-    st = make_store()
-    errs = E.validate_control(
-        {"template": "FRESHNESS", "params": '{"column": "montant", "max_lag_days": 30}'},
-        st, "ventes")
-    assert any("date" in e for e in errs), errs
+    raison = _raison("FRESHNESS", {"column": "montant", "max_lag_days": 30})
+    assert raison and "date" in raison, raison
+
+
+@check("applicabilite: une regle dont la cible existe est bien applicable")
+def _():
+    eq(_raison("NOT_NULL", {"column": "montant"}), None, "cible presente")
 
 
 @check("validateur: JSON illisible rejete")
@@ -259,14 +286,15 @@ def _():
     assert any("reguliere" in e for e in errs), errs
 
 
-@check("validateur: referentiel cible inconnu rejete")
+@check("validateur: fichier de reference introuvable rejete")
 def _():
     st = make_store()
     errs = E.validate_control(
         {"template": "FOREIGN_KEY",
-         "params": '{"column": "devise", "ref_dataset": "absent", "ref_column": "code"}'},
-        st, "ventes")
-    assert any("Referentiel" in e for e in errs), errs
+         "params": '{"column": "devise", "ref_fichier": "data/absent.csv", '
+                   '"ref_column": "code"}'},
+        st)
+    assert any("introuvable" in e for e in errs), errs
 
 
 @check("validateur: un controle correct passe sans erreur")
@@ -281,36 +309,244 @@ def _():
 # --------------------------------------------------------------------------- #
 @check("cibles: ciblage par colonne -> une cible")
 def _():
-    st = make_store()
-    eq(E.resolve_targets("NOT_NULL", {"column": "montant"}, st, "ventes"),
+    eq(E.resolve_targets("NOT_NULL", {"column": "montant"}, PROFIL_VENTES),
        [["montant"]], "cible unique")
 
 
-@check("cibles: ciblage par role -> une cible par colonne portant le role")
+@check("cibles: ciblage par motif -> une cible par colonne dont le nom correspond")
 def _():
-    st = make_store()
-    eq(E.resolve_targets("NOT_NULL", {"role": "identifiant"}, st, "ventes"),
-       [["vente_id"]], "role identifiant")
+    eq(E.resolve_targets("NOT_NULL", {"colonnes_motif": "(?i)(^|_)id$"}, PROFIL_VENTES),
+       [["vente_id"]], "motif d identifiant")
 
 
-@check("cibles: role cle_primaire sur UNIQUE_KEY -> cle composee unique")
+@check("cibles: UNIQUE_KEY sur cle composee -> une seule cible multi-colonnes")
 def _():
-    st = make_store()
-    eq(E.resolve_targets("UNIQUE_KEY", {"role": "cle_primaire"}, st, "ventes"),
-       [["vente_id"]], "cle primaire")
+    eq(E.resolve_targets("UNIQUE_KEY", {"columns": ["vente_id", "devise"]},
+                         PROFIL_VENTES),
+       [["vente_id", "devise"]], "cle composee")
 
 
-@check("cibles: le meme controle se propage a un dataset inconnu du catalogue")
+@check("cibles: la meme regle se propage a un fichier jamais declare")
 def _():
-    st = make_store()
-    st.upsert_dataset("inventaire", {"libelle": "x", "source": "s.csv", "colonnes": [
-        {"colonne": "sku", "type": "string", "role": "identifiant", "cle_primaire": "OUI",
-         "obligatoire": "OUI", "description": "", "fk_dataset": "", "fk_colonne": ""},
-        {"colonne": "ean", "type": "string", "role": "identifiant", "cle_primaire": "NON",
-         "obligatoire": "OUI", "description": "", "fk_dataset": "", "fk_colonne": ""}]},
-        "y", "test")
-    cibles = E.resolve_targets("NOT_NULL", {"role": "identifiant"}, st, "inventaire")
-    eq(cibles, [["sku"], ["ean"]], "propagation par role sans modifier la regle")
+    autre = E.profiler(pd.DataFrame({"sku_id": ["A"], "ean_id": ["B"],
+                                     "libelle": ["C"]}))
+    eq(E.resolve_targets("NOT_NULL", {"colonnes_motif": "(?i)(^|_)id$"}, autre),
+       [["sku_id"], ["ean_id"]],
+       "une regle ecrite pour les ventes couvre un inventaire sans etre modifiee")
+
+
+# --------------------------------------------------------------------------- #
+# 2 bis. Genericite du catalogue livre
+# --------------------------------------------------------------------------- #
+@check("catalogue: aucune regle en service ne nomme une colonne particuliere")
+def _():
+    """Annexe A.4 : les controles doivent etre « independent of datasets
+    (reusable) ». Une regle qui nomme `turnover_notionnel` ne l'est pas, quelle
+    que soit sa portee. Le ciblage se fait par motif de nom de colonne."""
+    st = CatalogueStore()
+    nommantes = []
+    for c in st.active_controls():
+        params = E.parse_params(c.get("params"))
+        cite = (params.get("column") or params.get("columns")
+                or params.get("before") or params.get("after")
+                or params.get("field_a") or params.get("amount")
+                or params.get("expression"))
+        if cite:
+            nommantes.append(f"{c['rule_id']} ({cite})")
+    eq(nommantes, [], "regles liees a un jeu de donnees particulier")
+
+
+@check("catalogue: le socle livre couvre plusieurs dimensions sans donnees")
+def _():
+    st = CatalogueStore()
+    dimensions = {c["control_type"] for c in st.active_controls()}
+    for attendue in ["Completeness", "Validity", "Uniqueness", "Timeliness"]:
+        assert attendue in dimensions, f"{attendue} absente du socle : {dimensions}"
+
+
+@check("catalogue: le socle s applique a des fichiers de metiers differents")
+def _():
+    """Le meme catalogue, sans une ligne de configuration, doit trouver quelque
+    chose sur des fichiers qui n'ont rien en commun."""
+    st = CatalogueStore()
+    sante = pd.DataFrame({
+        "patient_id": ["P1", None, "P3"] * 10,
+        "total_cost_eur": [10.0, -5.0, 20.0] * 10,
+    })
+    logistique = pd.DataFrame({
+        "order_id": ["O1", "O2", None] * 10,
+        "country_code": ["FR", "be", "DE"] * 10,
+        "quantity": [1, -2, 3] * 10,
+    })
+    for nom, df in [("sante", sante), ("logistique", logistique)]:
+        chemin = TMP / f"socle_{nom}.csv"
+        df.to_csv(chemin, index=False)
+        run = E.run_dq(chemin, store=st, write_evidence=False)
+        resume = run.summary()
+        assert resume["fail"] >= 2, f"{nom}: le socle doit trouver des ecarts"
+        eq(resume["erreur"], 0, f"{nom}: aucune erreur technique")
+
+
+@check("reconciliation: rapprocher deux sources fonctionne bout en bout")
+def _():
+    """La sixieme dimension ne peut pas etre proposee automatiquement - elle
+    suppose une seconde source, que seul un humain peut designer. La capacite
+    doit donc etre demontree ici : une regle qui pointe un second fichier est
+    acceptee par le validateur, s execute, et chiffre l ecart."""
+    source, cible = TMP / "recon_source.csv", TMP / "recon_cible.csv"
+    pd.DataFrame({"id": [f"L{i}" for i in range(100)]}).to_csv(source, index=False)
+    pd.DataFrame({"id": [f"L{i}" for i in range(97)]}).to_csv(cible, index=False)
+
+    st = CatalogueStore()
+    regle = {
+        "rule_id": "DQ99", "control_name": "Rapprochement du nombre de lignes",
+        "control_type": "Reconciliation", "template": "COUNT_RECONCILIATION",
+        "params": json.dumps({"ref_fichier": str(cible).replace("\\", "/")}),
+        "dataset_scope": "recon_source", "severity": "High",
+        "seuil_tolerance_pct": 0, "description": "x", "remediation_action": "y",
+        "owner": "z", "frequency": "A la demande",
+        "output_type": "Exception report", "kpi": "", "logic_definition": "",
+        "data_element": "",
+    }
+    eq(E.validate_control(regle, st, pathlib.Path("/")), [], "regle acceptee")
+    st.add_control(regle, "test", "demonstration de la reconciliation")
+
+    run = E.run_dq(source, store=st, write_evidence=False)
+    ligne = run.scorecard[run.scorecard["rule_id"] == "DQ99"]
+    eq(len(ligne), 1, "le controle produit une ligne de resultat")
+    eq(ligne.iloc[0]["statut"], "FAIL", "trois lignes manquent a la cible")
+    eq(int(ligne.iloc[0]["kpi_valeur"]), 3, "ecart chiffre")
+
+
+# --------------------------------------------------------------------------- #
+# 3 bis. Suggestions : un fichier inconnu propose ses propres controles
+# --------------------------------------------------------------------------- #
+def _sale() -> pd.DataFrame:
+    """Fichier synthetique porteur d'un defaut par dimension."""
+    lignes = 100
+    return pd.DataFrame({
+        # quasi unique : 2 doublons -> Uniqueness
+        "ref_ligne": [f"R{i:04d}" for i in range(lignes - 2)] + ["R0000", "R0001"],
+        # 2 trous -> Completeness
+        "libelle": [None, None] + [f"produit {i}" for i in range(lignes - 2)],
+        # 2 modalites marginales -> Validity (domaine)
+        "categorie": ["A"] * 49 + ["B"] * 49 + ["ZZZ", "QQQ"],
+        # 1 valeur negative -> Validity (bornes)
+        "montant": [-42.0] + [float(10 + i % 30) for i in range(lignes - 1)],
+        "debut": ["2026-01-01"] * lignes,
+        # 3 sorties avant entree -> Consistency
+        "fin": ["2025-01-01"] * 3 + ["2026-02-01"] * (lignes - 3),
+    })
+
+
+@check("suggestions: un fichier inconnu couvre cinq dimensions sans rien declarer")
+def _():
+    df = _sale()
+    props = S.suggerer(df, E.profiler(df), "sale", as_of=dt.date(2026, 3, 1))
+    dims = {p["dimension"] for p in props}
+    for attendue in ["Completeness", "Validity", "Uniqueness", "Consistency",
+                     "Timeliness"]:
+        assert attendue in dims, f"{attendue} absente de {dims}"
+
+
+@check("suggestions: chaque defaut seme est retrouve et chiffre")
+def _():
+    df = _sale()
+    props = S.suggerer(df, E.profiler(df), "sale", as_of=dt.date(2026, 3, 1))
+    par_template = {}
+    for p in props:
+        cible = p["params"].get("column") or ",".join(p["params"].get("columns", []))
+        par_template[(p["template"], cible)] = p["impact"]
+    eq(par_template.get(("NOT_NULL", "libelle")), 2, "deux libelles vides")
+    eq(par_template.get(("UNIQUE_KEY", "ref_ligne")), 4, "deux doublons, quatre lignes")
+    eq(par_template.get(("IN_DOMAIN", "categorie")), 2, "deux modalites marginales")
+    eq(par_template.get(("RANGE", "montant")), 1, "un montant negatif")
+    eq(par_template.get(("DATE_ORDER", "")), 3, "trois dates inversees")
+
+
+@check("suggestions: une distribution etalee ne produit pas de fausse anomalie")
+def _():
+    # Une exponentielle a une longue traine : l'ecart interquartile en signale
+    # beaucoup, mais ce n'est pas un defaut - c'est la forme de la loi.
+    valeurs = [float(2 ** (i % 20)) for i in range(1000)]
+    df = pd.DataFrame({"montant": valeurs})
+    props = S.suggerer(df, E.profiler(df), "expo")
+    bornes = [p for p in props if p["template"] == "RANGE"]
+    assert not bornes, f"aucune borne ne devrait etre proposee, obtenu {bornes}"
+
+
+@check("suggestions: le module ne decide rien, il ne touche pas au catalogue")
+def _():
+    st = CatalogueStore(TMP / "store_sug.json")
+    st.data = {"meta": {"schema": "2.0"}, "templates": [], "controls": [],
+               "changelog": []}
+    df = _sale()
+    S.suggerer(df, E.profiler(df), "sale")
+    eq(len(st.controls), 0, "aucun controle ecrit sans acceptation humaine")
+
+
+@check("suggestions: une proposition acceptee devient une ligne de catalogue valide")
+def _():
+    st = CatalogueStore()
+    df = _sale()
+    props = S.suggerer(df, E.profiler(df), "sale", as_of=dt.date(2026, 3, 1))
+    for p in props:
+        controle = S.en_controle(p, "DQ99")
+        for attribut in ["rule_id", "control_name", "control_type", "description",
+                         "dataset_scope", "data_element", "seuil_tolerance_pct",
+                         "severity", "frequency", "owner", "output_type",
+                         "remediation_action"]:
+            assert attribut in controle, f"{attribut} manquant sur {p['cle']}"
+        eq(E.validate_control(controle, st), [], f"proposition invalide : {p['cle']}")
+
+
+@check("suggestions: le meme fichier donne toujours les memes propositions")
+def _():
+    df = _sale()
+    a = S.suggerer(df, E.profiler(df), "sale", as_of=dt.date(2026, 3, 1))
+    b = S.suggerer(df, E.profiler(df), "sale", as_of=dt.date(2026, 3, 1))
+    eq([p["cle"] for p in a], [p["cle"] for p in b], "ordre reproductible")
+    eq([p["impact"] for p in a], [p["impact"] for p in b], "impacts reproductibles")
+
+
+@check("robustesse: la chaine complete tient sur des fichiers degeneres")
+def _():
+    """Sept fichiers pathologiques : aucun ne doit faire tomber la chaine.
+
+    « Plug-and-play […] integrated into any EUC » se verifie sur les cas laids,
+    pas sur le fichier de demonstration.
+    """
+    cas = {
+        "une_seule_ligne": pd.DataFrame({"a": [1], "b": ["x"]}),
+        "colonne_toute_vide": pd.DataFrame({"a": [None] * 50,
+                                            "b": list(range(50))}),
+        "une_seule_colonne": pd.DataFrame({"seule": [f"v{i}" for i in range(50)]}),
+        "types_melanges": pd.DataFrame({"m": [1, "deux", 3.5, None,
+                                              "2026-01-01"] * 10}),
+        "noms_bizarres": pd.DataFrame({"a b/c": [1] * 30, "": [2] * 30,
+                                       "é#$": [3] * 30}),
+        "tout_identique": pd.DataFrame({"c": ["K"] * 40, "d": [7] * 40}),
+        "sans_ligne": pd.DataFrame({"a": pd.Series(dtype=float),
+                                    "b": pd.Series(dtype=object)}),
+    }
+    st = CatalogueStore()
+    for nom, df in cas.items():
+        profil = E.profiler(df)
+        eq(len(profil), len(df.columns), f"{nom}: une ligne de profil par colonne")
+        S.suggerer(df, profil, nom)
+        chemin = TMP / f"{nom}.csv"
+        df.to_csv(chemin, index=False)
+        run = E.run_dq(chemin, store=st, write_evidence=False)
+        eq(run.summary()["erreur"], 0, f"{nom}: aucune erreur technique")
+
+
+@check("suggestions: un fichier trop court ne fait pas parler les statistiques")
+def _():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "zz"]})
+    props = S.suggerer(df, E.profiler(df), "minuscule")
+    interdits = {"IN_DOMAIN", "RANGE", "MATCHES_REGEX"}
+    assert not [p for p in props if p["template"] in interdits], \
+        "aucune statistique ne doit etre tiree de trois lignes"
 
 
 # --------------------------------------------------------------------------- #
@@ -345,7 +581,8 @@ def _():
 def _():
     st = make_store()
     n, ko, _, _, exc = E.ex_foreign_key(
-        VENTES, {"column": "devise", "ref_dataset": "ref_dev", "ref_column": "code"},
+        VENTES, {"column": "devise", "ref_fichier": "data/ref_dev.csv",
+                 "ref_column": "code"},
         ["devise"], ctx(st))
     eq((n, ko), (5, 1), "un orphelin")
     eq(exc.iloc[0]["valeur"], "XXX", "valeur orpheline")
@@ -421,43 +658,46 @@ def _():
 # --------------------------------------------------------------------------- #
 # 5. Reconnaissance du fichier et langage metier
 # --------------------------------------------------------------------------- #
-@check("detection: un fichier BIS est rattache a son contrat a 100%")
+@check("profilage: les types sont deduits du contenu, jamais declares")
 def _():
-    st = CatalogueStore()
-    df = E.charger_fichier(FICHIER_DEMO)
-    candidats = E.detecter_contrat(df.columns, st)
-    eq(candidats[0][0], "bis_turnover", "contrat detecte")
-    eq(candidats[0][1], 1.0, "taux de recouvrement")
+    types = {c["colonne"]: c["type"] for c in PROFIL_VENTES}
+    eq(types["montant"], "decimal", "montant")
+    eq(types["date_vente"], "date", "date_vente")
+    eq(types["devise"], "string", "devise")
 
 
-@check("detection: un referentiel n'est pas confondu avec un fichier large")
+@check("profilage: une colonne d annees n est pas prise pour une date")
 def _():
-    st = CatalogueStore()
-    df = E.charger_fichier(ROOT / "data" / "ref" / "ref_devises.csv")
-    candidats = dict(E.detecter_contrat(df.columns, st))
-    eq(candidats["ref_devises"], 1.0, "le referentiel se reconnait")
-    assert candidats["bis_turnover"] < 0.1, candidats
+    profil = E.profiler(pd.DataFrame({"annee": [1986, 2019, 2022]}))
+    eq(profil[0]["type"], "integer", "une annee reste un entier")
 
 
-@check("detection: un fichier inconnu est refuse avec ses candidats")
+@check("profilage: la cle candidate sert d identifiant de ligne")
+def _():
+    profil = E.profiler(pd.DataFrame({"id": ["A", "B"], "v": [1, 1]}))
+    eq(E.cle_candidate(profil), "id", "colonne integralement unique")
+    eq(E.cle_candidate(E.profiler(pd.DataFrame({"v": [1, 1]}))), None,
+       "aucune colonne unique")
+
+
+@check("plug-and-play: un fichier jamais vu est controle sans etre declare")
 def _():
     st = CatalogueStore()
     inconnu = TMP / "inconnu.csv"
     pd.DataFrame({"aaa": [1], "bbb": [2]}).to_csv(inconnu, index=False)
-    try:
-        E.run_dq(inconnu, store=st, write_evidence=False)
-    except E.ContratIntrouvable as exc:
-        assert exc.candidats, "les candidats doivent accompagner le refus"
-        return
-    raise AssertionError("un fichier inconnu aurait du etre refuse")
+    run = E.run_dq(inconnu, store=st, write_evidence=False)
+    eq(run.contrat, "inconnu", "le nom du fichier tient lieu de nom de jeu")
+    eq(set(run.scorecard["statut"]), {"NON_APPLICABLE"},
+       "les regles universelles sont evaluees puis declarees hors perimetre")
+    eq(run.summary()["erreur"], 0, "aucune erreur technique sur un fichier inconnu")
 
 
-@check("detection: le contrat peut etre impose plutot que devine")
+@check("portee: le nom du fichier peut etre impose plutot que deduit")
 def _():
     st = CatalogueStore()
     run = E.run_dq(FICHIER_DEMO, dataset="bis_turnover", store=st,
                    write_evidence=False)
-    eq(run.contrat, "bis_turnover", "contrat impose")
+    eq(run.contrat, "bis_turnover", "nom impose")
 
 
 @check("chargement: CSV et Excel sont acceptes, les autres formats refuses")
@@ -500,7 +740,8 @@ def _():
 def _():
     st = CatalogueStore()
     eq(phrase_controle(st.control("DQ02"), st),
-       "Toute information de type « identifiant » doit être renseignée.", "par role")
+       "Toute colonne dont le nom correspond à « (?i)(^|_)id$ » doit être "
+       "renseignée sur chaque ligne.", "par motif de colonnes")
     eq(phrase_controle(st.control("DQ03"), st),
        "La colonne « turnover_notionnel » doit être supérieure ou égale à 0.",
        "borne minimale seule")
@@ -519,7 +760,7 @@ def _():
 # --------------------------------------------------------------------------- #
 @check("moteur: run complet sur les donnees BIS, aucun rejet ni erreur")
 def _():
-    st = CatalogueStore()
+    st = store_bis()
     run = E.run_dq(FICHIER_DEMO, store=st, run_label="test", write_evidence=False)
     s = run.summary()
     eq(s["erreur"], 0, "aucune erreur d'execution")
@@ -529,7 +770,7 @@ def _():
 
 @check("moteur: les 6 dimensions du brief sont couvertes")
 def _():
-    st = CatalogueStore()
+    st = store_bis()
     run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     attendues = {"Completeness", "Validity", "Uniqueness", "Consistency",
                  "Timeliness", "Reconciliation"}
@@ -544,30 +785,38 @@ def _():
     eq(inactifs & set(run.scorecard["rule_id"]), set(), "controles inactifs executes")
 
 
-@check("moteur: seuls les controles du perimetre du contrat s'executent")
+@check("moteur: toute regle est tentee sur tout fichier, l applicabilite tranche")
 def _():
-    st = CatalogueStore()
+    """La portee ne filtre plus par nom de fichier : c'est la presence des
+    colonnes qui decide, et une regle hors sujet le dit au lieu de disparaitre."""
+    st = store_bis()
     run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
                    write_evidence=False)
-    eq(run.contrat, "ref_devises", "contrat detecte")
-    assert "DQ01" not in set(run.scorecard["rule_id"]), \
-        "un controle propre au fichier BIS ne doit pas tourner sur un referentiel"
-    assert "DQ14" in set(run.scorecard["rule_id"]), "DQ14 cible ce referentiel"
+    eq(run.contrat, "ref_devises", "nom du fichier")
+    statuts = run.scorecard.set_index("rule_id")["statut"].to_dict()
+    assert "DQ01" in statuts, "une regle universelle doit etre tentee partout"
+    eq(statuts["DQ01"], "NON_APPLICABLE",
+       "faute de colonne, elle est hors perimetre : ni echec, ni erreur")
+    eq(statuts.get("DQ14"), "PASS", "la regle qui trouve ses colonnes s execute")
+    eq(statuts.get("DQ02"), "NON_APPLICABLE",
+       "le referentiel des devises ne porte aucune colonne d identifiant")
+    eq(run.summary()["erreur"], 0, "aucune erreur technique")
 
 
 @check("moteur: le referentiel est charge tout seul pour l'integrite referentielle")
 def _():
-    st = CatalogueStore()
+    st = store_bis()
     run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     sources = run.manifeste["sources"]
-    assert "ref_devises" in sources, \
+    chemin = "data/ref/ref_devises.csv"
+    assert chemin in sources, \
         "le referentiel doit etre charge sans que l'utilisateur le fournisse"
-    assert sources["ref_devises"]["sha256"], "et etre empreinte comme les autres"
+    assert sources[chemin]["sha256"], "et etre empreinte comme les autres"
 
 
 @check("moteur: l'orphelin CLS est detecte sur la jambe 2")
 def _():
-    st = CatalogueStore()
+    st = store_bis()
     run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     exc = run.exceptions
     cls = exc[(exc["rule_id"] == "DQ09") & (exc["valeur"] == "CLS")]
@@ -579,8 +828,11 @@ def _():
     st = CatalogueStore()
     st.add_control({"rule_id": "DQZZ", "control_name": "Casse volontairement",
                     "template": "CUSTOM_EXPRESSION",
-                    "params": '{"expression": "colonne_absente > 0"}',
-                    "dataset_scope": "ref_devises", "severity": "Low",
+                    # La colonne existe, donc l applicabilite laisse passer :
+                    # c est la comparaison d un texte a un nombre qui casse a
+                    # l execution. Une colonne absente serait NON_APPLICABLE.
+                    "params": '{"expression": "code_devise > 0"}',
+                    "dataset_scope": "*", "severity": "Low",
                     "seuil_tolerance_pct": 0}, "test")
     run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
                    write_evidence=False)
@@ -596,8 +848,8 @@ def _():
     a = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     b = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     eq(a.manifeste["catalogue_sha256"], b.manifeste["catalogue_sha256"], "hash catalogue")
-    eq(a.manifeste["sources"]["bis_turnover"]["sha256"],
-       b.manifeste["sources"]["bis_turnover"]["sha256"], "hash source")
+    eq(a.manifeste["sources"]["bis_turnover_demo"]["sha256"],
+       b.manifeste["sources"]["bis_turnover_demo"]["sha256"], "hash source")
     colonnes = ["rule_id", "cible", "statut", "lignes_ko"]
     eq(a.scorecard[colonnes].to_dict("records"),
        b.scorecard[colonnes].to_dict("records"), "resultats identiques")
@@ -615,7 +867,10 @@ def _():
     manifeste = json.loads((run.evidence_path / "manifest.json").read_text(encoding="utf-8"))
     eq(len(manifeste["catalogue_sha256"]), 64, "empreinte du catalogue")
     assert manifeste["fichier_controle"].endswith("ref_devises.csv"), "fichier trace"
-    eq(manifeste["contrat_applique"], "ref_devises", "contrat trace")
+    eq(manifeste["fichier_nom"], "ref_devises", "nom du fichier trace")
+    assert manifeste["profil_fichier"], "le profil deduit fait partie des preuves"
+    eq([c["colonne"] for c in manifeste["profil_fichier"]],
+       ["code_devise", "libelle_devise", "type"], "structure tracee dans les preuves")
     shutil.rmtree(run.evidence_path, ignore_errors=True)
 
 
@@ -702,32 +957,95 @@ def _page(nom: str):
     return at
 
 
-@check("interface: l'ecran Controler un fichier se rend sans exception")
+@check("interface: l ecran Catalogue de controles se rend sans exception")
 def _():
     at = _apptest().run()
     assert not at.exception, at.exception
 
 
-@check("interface: l'ecran Regles de controle se rend sans exception")
+@check("interface: les ecrans suivent le cycle de vie du brief")
 def _():
-    at = _page("Règles de contrôle")
+    at = _apptest().run()
+    eq(list(at.sidebar.radio[0].options),
+       ["① Catalogue de contrôles", "② Exécution", "③ Restitution",
+        "④ Piste d'audit"],
+       "definit, execute, restitue, prouve")
+
+
+@check("interface: l ecran Execution se rend sans exception")
+def _():
+    _page("② Exécution")
+
+
+@check("interface: l ecran Restitution se rend sans exception")
+def _():
+    _page("③ Restitution")
+
+
+def _restitution():
+    """Lance un controle depuis l ecran d execution, puis ouvre la restitution."""
+    at = _apptest().run()
+    at.sidebar.radio[0].set_value("② Exécution").run()
+    selecteur = [b for b in at.selectbox if b.label == "Fichier"][0]
+    cible = [o for o in selecteur.options if "inventaire" in str(o)][0]
+    at = selecteur.set_value(cible).run()
+    at = [b for b in at.button if "Lancer" in b.label][0].click().run()
+    assert not at.exception, at.exception
+    at = at.sidebar.radio[0].set_value("③ Restitution").run()
+    assert not at.exception, at.exception
+    return at
+
+
+@check("restitution: le tableau de bord porte ses graphiques et ses onglets")
+def _():
+    at = _restitution()
+    graphiques = [e for e in at.main if e.type == "vega_lite_chart"]
+    assert len(graphiques) >= 2, f"graphiques attendus, obtenu {len(graphiques)}"
+    eq(len(at.tabs), 5, "detail, exceptions, couverture, historique, refusees")
+
+
+@check("restitution: tout ce qui est affiche est exportable")
+def _():
+    at = _restitution()
+    libelles = " ".join(b.label for b in at.get("download_button"))
+    for attendu in ["Excel", "tableau de bord", "exceptions"]:
+        assert attendu in libelles, f"export manquant : {attendu} dans {libelles}"
+
+
+@check("restitution: vert et rouge ne sont jamais adjacents dans l empilement")
+def _():
+    """Le validateur de palette mesure un ecart CVD de 4,1 entre le vert et le
+    rouge en deuteranopie : cote a cote, deux segments indistinguables. Le gris
+    et le jaune s intercalent, ce qui porte le pire ecart adjacent a 10,7."""
+    source = (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
+    debut = source.index("STATUTS_VUE = [")
+    espace = {}
+    exec(compile(source[debut:source.index("]", debut) + 1], "app_ui", "exec"), espace)
+    ordre = [code for code, _, _, _ in espace["STATUTS_VUE"]]
+    eq(ordre.index("NON_APPLICABLE") - ordre.index("PASS"), 1,
+       "le gris suit immediatement le vert")
+    assert abs(ordre.index("PASS") - ordre.index("FAIL")) > 1, \
+        "PASS et FAIL ne doivent jamais etre adjacents"
+    for code, nom, puce, _ in espace["STATUTS_VUE"]:
+        assert puce and nom, f"{code} doit porter une pastille et un libelle"
+
+
+@check("interface: l ecran Piste d audit se rend sans exception")
+def _():
+    _page("④ Piste d'audit")
+
+
+@check("interface: aucun ecran ne demande de declarer un fichier")
+def _():
+    at = _apptest().run()
     textes = " ".join(str(m.value) for m in at.markdown)
-    assert "Règles de contrôle" in textes or at.header, "en-tete absent"
-
-
-@check("interface: l'ecran Fichiers connus se rend sans exception")
-def _():
-    _page("Fichiers connus")
-
-
-@check("interface: l'ecran Journal se rend sans exception")
-def _():
-    _page("Journal")
+    assert "Décrire un nouveau fichier" not in textes, \
+        "aucun formulaire de declaration ne doit subsister"
 
 
 @check("interface: l'editeur propose les regles en langage metier, pas en template_id")
 def _():
-    at = _page("Règles de contrôle")
+    at = _page("① Catalogue de contrôles")
     boutons = [b for b in at.button if "Créer une règle" in b.label]
     assert boutons, f"bouton de creation absent : {[b.label for b in at.button]}"
     boutons[0].click().run()
@@ -739,9 +1057,82 @@ def _():
         "les identifiants techniques ne doivent pas etre proposes a l'utilisateur"
 
 
+@check("interface: l editeur sait lire les colonnes d un fichier")
+def _():
+    """Sans schema declare, l editeur n'a aucune colonne a proposer tant qu'un
+    fichier n'a pas ete lu. Lire l'en-tete suffit : inutile de profiler."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("app_ui", ROOT / "ui" / "app.py")
+    # Le module s'execute au chargement (il rend l'interface) : on ne teste que
+    # la fonction, extraite du source pour ne pas declencher Streamlit.
+    source = (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
+    debut = source.index("def entetes_du_fichier(")
+    fin = source.index("def retenir_entetes(")
+    espace = {"pd": pd, "pathlib": pathlib}
+    exec(compile(source[debut:fin], "app_ui", "exec"), espace)
+    entetes = espace["entetes_du_fichier"]
+
+    csv = TMP / "entetes.csv"
+    pd.DataFrame({"a": [1], "b c": [2], "é": [3]}).to_csv(csv, index=False)
+    eq(entetes(csv), ["a", "b c", "é"], "colonnes du CSV")
+
+    xlsx = TMP / "entetes.xlsx"
+    pd.DataFrame({"x": [1], "y": [2]}).to_excel(xlsx, index=False)
+    eq(entetes(xlsx), ["x", "y"], "colonnes du classeur")
+    assert spec is not None
+
+
+@check("interface: le bouton de creation est le premier de l ecran")
+def _():
+    at = _page("① Catalogue de contrôles")
+    eq(at.button[0].label, "➕ Créer une règle",
+       "la creation doit venir avant le tableau, pas apres")
+
+
+@check("interface: l editeur propose de charger un fichier quand il ne sait rien")
+def _():
+    """Sans schema declare, l editeur doit offrir de lire un fichier : sinon une
+    regle ciblant une colonne nommee est inconstruisible depuis le catalogue."""
+    at = _page("① Catalogue de contrôles")
+    at.button[0].click().run()          # Creer une regle
+    assert not at.exception, at.exception
+    titres = [str(e.label) for e in at.expander]
+    assert any("colonne" in t.lower() for t in titres), \
+        f"aucun selecteur de colonnes : {titres}"
+    assert "Un fichier déjà présent" in [b.label for b in at.selectbox], \
+        "l editeur doit proposer les fichiers presents"
+
+
+@check("interface: charger un fichier depuis l editeur alimente les listes de colonnes")
+def _():
+    """Le parcours complet sans passer par l ecran d execution : on ouvre le
+    catalogue, on cree une regle, on charge un fichier, ses colonnes sont
+    proposees. Sans cela, une regle ciblant une colonne nommee serait
+    inconstruisible depuis le catalogue."""
+    at = _page("① Catalogue de contrôles")
+    at.button[0].click().run()
+
+    selecteur = [b for b in at.selectbox if b.label == "Un fichier déjà présent"][0]
+    cible = [o for o in selecteur.options if "health" in str(o)][0]
+    at = selecteur.set_value(cible).run()
+    assert not at.exception, at.exception
+
+    profils = at.session_state["profils_vus"]
+    assert "health_test_dataset" in profils, f"fichier non memorise : {list(profils)}"
+    colonnes = [c["colonne"] for c in profils["health_test_dataset"]]
+    eq(len(colonnes), 12, "les douze colonnes du fichier")
+    assert "patient_id" in colonnes, colonnes
+
+    listes = [b for b in at.selectbox if "remplie" in str(b.label)]
+    assert listes, "la liste des colonnes cibles doit apparaitre"
+    assert "patient_id" in [str(o) for o in listes[0].options], \
+        "les colonnes du fichier doivent etre proposees comme cible"
+
+
 @check("interface: l'editeur refuse d'enregistrer une regle incomplete")
 def _():
-    at = _page("Règles de contrôle")
+    at = _page("① Catalogue de contrôles")
     [b for b in at.button if "Créer une règle" in b.label][0].click().run()
     enregistrer = [b for b in at.button if "Enregistrer la règle" in b.label]
     assert enregistrer, "bouton d'enregistrement absent"

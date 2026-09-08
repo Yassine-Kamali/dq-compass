@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import fnmatch
 import json
 import pathlib
 from typing import Any
@@ -72,8 +73,8 @@ class CatalogueStore:
     # ------------------------------------------------------------------ io
     def _load(self) -> dict:
         if not self.path.exists():
-            return {"meta": {"schema": "1.0", "updated_at": _now()},
-                    "templates": [], "datasets": {}, "controls": [], "changelog": []}
+            return {"meta": {"schema": "2.0", "updated_at": _now()},
+                    "templates": [], "controls": [], "changelog": []}
         with self.path.open(encoding="utf-8") as fh:
             return json.load(fh)
 
@@ -95,10 +96,6 @@ class CatalogueStore:
         return self.data["controls"]
 
     @property
-    def datasets(self) -> dict:
-        return self.data["datasets"]
-
-    @property
     def changelog(self) -> list[dict]:
         return self.data["changelog"]
 
@@ -107,13 +104,6 @@ class CatalogueStore:
 
     def control(self, rule_id: str) -> dict | None:
         return next((c for c in self.controls if c["rule_id"] == rule_id), None)
-
-    def dataset(self, name: str) -> dict | None:
-        return self.datasets.get(name)
-
-    def columns_of(self, dataset: str) -> list[dict]:
-        ds = self.dataset(dataset)
-        return ds["colonnes"] if ds else []
 
     def next_rule_id(self) -> str:
         nums = [int(c["rule_id"][2:]) for c in self.controls
@@ -172,25 +162,35 @@ class CatalogueStore:
             raise ValueError(f"Statut invalide : {statut}. Attendu : {STATUTS}")
         return self.update_control(rule_id, {"statut": statut}, user, motif)
 
-    def delete_control(self, *_a, **_k):
-        raise PermissionError(
-            "Suppression interdite : l'audit exige de rejouer les runs historiques. "
-            "Utilisez le statut Suspendu ou Deprecie."
-        )
+    def delete_control(self, rule_id: str, user: str, motif: str = "") -> dict:
+        """Retire une regle du catalogue sans perdre sa definition.
 
-    # --------------------------------------------------------- dataset defs
-    def upsert_dataset(self, name: str, definition: dict, user: str, motif: str = "") -> dict:
-        action = "DATASET_MAJ" if name in self.datasets else "DATASET_AJOUT"
-        self.datasets[name] = definition
-        self._journal(action, name, "contrat", None,
-                      f"{len(definition.get('colonnes', []))} colonnes", user, motif)
-        return definition
+        La suppression a longtemps ete interdite ici, au motif qu'un rapport
+        deja produit devait rester explicable. L'argument ne tient plus : chaque
+        pack de preuves embarque le catalogue integral du moment
+        (`catalogue_snapshot.json`), et le journal conserve ci-dessous la
+        definition complete de la regle retiree. Un run passe reste donc
+        reconstructible apres la suppression de la regle qui l'a produit.
+
+        Ce qui reste interdit, c'est de supprimer sans dire pourquoi.
+        """
+        ctrl = self.control(rule_id)
+        if ctrl is None:
+            raise ValueError(f"Controle inconnu : {rule_id}")
+        if not str(motif).strip():
+            raise ValueError(
+                "Une suppression exige un motif : il est conserve au journal.")
+        self.controls.remove(ctrl)
+        self._journal("SUPPRESSION", rule_id, "*",
+                      json.dumps(ctrl, ensure_ascii=False), None, user, motif)
+        return ctrl
 
     # ------------------------------------------------------------- helpers
-    def active_controls(self, dataset: str | None = None) -> list[dict]:
+    def active_controls(self, fichier: str | None = None) -> list[dict]:
+        """Controles en service, filtres au besoin par le nom du fichier vise."""
         out = [c for c in self.controls if c.get("statut") == "Actif"]
-        if dataset is not None:
-            out = [c for c in out if scope_matches(c.get("dataset_scope", ""), dataset)]
+        if fichier is not None:
+            out = [c for c in out if scope_matches(c.get("dataset_scope", ""), fichier)]
         return out
 
 
@@ -205,19 +205,30 @@ def _gabarit(tpl: dict, params: dict) -> str:
     """Choisit la formulation la plus precise que le template propose.
 
     Un template peut declarer plusieurs variantes de phrase : `phrase_<sens>`
-    pour un mode d'execution, `phrase_role` pour un ciblage par role, et
-    `phrase_min` / `phrase_max` pour une borne unique. La plus specifique gagne.
+    pour un mode d'execution, `phrase_motif` pour un ciblage par motif de nom de
+    colonne, et `phrase_min` / `phrase_max` pour une borne unique. La plus
+    specifique gagne.
     """
     sens = params.get("sens")
     if sens and tpl.get(f"phrase_{sens}"):
         return tpl[f"phrase_{sens}"]
-    if "role" in params and tpl.get("phrase_role"):
-        return tpl["phrase_role"]
-    if "min" in params and "max" not in params and tpl.get("phrase_min"):
-        return tpl["phrase_min"]
-    if "max" in params and "min" not in params and tpl.get("phrase_max"):
-        return tpl["phrase_max"]
-    return tpl.get("phrase", "")
+
+    # Une borne unique se dit autrement que deux : « au moins 0 » plutot que
+    # « entre 0 et … ». Le suffixe se combine au ciblage.
+    borne = ""
+    if "min" in params and "max" not in params:
+        borne = "_min"
+    elif "max" in params and "min" not in params:
+        borne = "_max"
+
+    candidats = []
+    if "colonnes_motif" in params:
+        candidats += [f"phrase_motif{borne}", "phrase_motif"]
+    candidats += [f"phrase{borne}", "phrase"]
+    for cle in candidats:
+        if tpl.get(cle):
+            return tpl[cle]
+    return ""
 
 
 def phrase_controle(control: dict, store: "CatalogueStore") -> str:
@@ -253,12 +264,20 @@ def libelle_statut(statut: str) -> str:
     return STATUTS_LIBELLES.get(statut, statut or "")
 
 
-def scope_matches(scope: str, dataset: str) -> bool:
-    """dataset_scope accepts '*', a single name, or a comma-separated list."""
+def scope_matches(scope: str, fichier: str) -> bool:
+    """La portee d'une regle se lit sur le nom du fichier, pas sur un contrat.
+
+    `dataset_scope` accepte '*', un motif de nom de fichier ('ventes_*') ou une
+    liste separee par des virgules. Le nom compare est celui du fichier sans son
+    extension : une regle ecrite aujourd'hui couvre ainsi les fichiers de demain
+    sans qu'on ait a les declarer.
+    """
     scope = (scope or "").strip()
     if scope in ("", "*"):
         return True
-    return dataset in [s.strip() for s in scope.split(",")]
+    cible = str(fichier or "")
+    return any(fnmatch.fnmatch(cible, motif.strip())
+               for motif in scope.split(",") if motif.strip())
 
 
 def load_store(path: pathlib.Path | str = STORE_PATH) -> CatalogueStore:

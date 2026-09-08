@@ -149,7 +149,7 @@ def _sheet_synthese(wb, fmt: _Fmt, run, sc: pd.DataFrame,
     ws.hide_gridlines(2)
     ws.write(0, 0, "DQ Compass - Scorecard qualite des donnees", fmt.titre)
     ws.write(1, 0, f"Fichier : {pathlib.Path(run.fichier).name or '-'}  |  "
-                   f"Contrat applique : {run.contrat}  |  Run {run.run_id}  |  "
+                   f"Fichier controle : {run.contrat}  |  Run {run.run_id}  |  "
                    f"{run.horodatage}", fmt.sous_titre)
 
     s = run.summary()
@@ -220,7 +220,7 @@ def _sheet_couverture(wb, fmt: _Fmt, run, sc: pd.DataFrame, store: CatalogueStor
              fmt.sous_titre)
 
     row = 3
-    ws.write(row, 0, "Dimensions x datasets (nombre de controles executes)", fmt.section)
+    ws.write(row, 0, "Dimensions x fichier (nombre de controles executes)", fmt.section)
     row += 1
     if sc.empty:
         pivot = pd.DataFrame()
@@ -244,10 +244,16 @@ def _sheet_couverture(wb, fmt: _Fmt, run, sc: pd.DataFrame, store: CatalogueStor
         if dim not in couvertes:
             trous.append({"objet": dim, "type": "Dimension",
                           "constat": "Aucun controle actif execute sur cette dimension"})
-    for name in store.datasets:
-        if sc.empty or name not in set(sc["dataset"]):
-            trous.append({"objet": name, "type": "Dataset",
-                          "constat": "Declare au contrat mais non controle sur ce run"})
+    hors_portee = [c for c in store.active_controls()
+                   if c["rule_id"] not in set(sc["rule_id"] if not sc.empty else [])]
+    for c in hors_portee:
+        trous.append({"objet": c["rule_id"], "type": "Hors portee",
+                      "constat": f"{c['control_name']} - portee '{c['dataset_scope']}' "
+                                 f"ne couvre pas ce fichier"})
+    if not sc.empty:
+        for _, r in sc[sc["statut"] == "NON_APPLICABLE"].iterrows():
+            trous.append({"objet": r["rule_id"], "type": "Non applicable",
+                          "constat": f"{r['control_name']} - {r['message']}"})
     for c in store.controls:
         if c.get("statut") != "Actif":
             trous.append({"objet": c["rule_id"], "type": f"Controle {c['statut']}",
@@ -379,8 +385,8 @@ def main() -> int:
 
     store = CatalogueStore()
     fichier = sys.argv[1] if len(sys.argv) > 1 else "data/prepared/bis_turnover.csv"
-    contrat = sys.argv[2] if len(sys.argv) > 2 else None
-    run = run_dq(fichier, dataset=contrat, store=store, run_label="Rapport Excel")
+    nom = sys.argv[2] if len(sys.argv) > 2 else None
+    run = run_dq(fichier, dataset=nom, store=store, run_label="Rapport Excel")
     out = build_workbook(run, store)
     print(f"Classeur ecrit : {out}")
     print(f"Synthese       : {run.summary()}")

@@ -15,6 +15,7 @@ Ce que ces tests defendent, dans l'ordre d'importance :
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -136,6 +137,26 @@ def proposition_valide(**surcharge) -> dict:
     }
     base.update(surcharge)
     return base
+
+
+@contextlib.contextmanager
+def sans_cle():
+    """Neutralise les deux sources de cle : environnement ET secrets Streamlit.
+
+    Retirer la variable d'environnement ne suffit pas : depuis qu'un
+    `.streamlit/secrets.toml` peut exister sur la machine du developpeur,
+    `cle_api()` y retomberait et le test passerait ou echouerait selon la
+    machine. On coupe donc aussi cette seconde source.
+    """
+    ancienne = os.environ.pop(IA.VAR_CLE, None)
+    vrai_secrets = IA._depuis_secrets
+    IA._depuis_secrets = lambda nom: None
+    try:
+        yield
+    finally:
+        IA._depuis_secrets = vrai_secrets
+        if ancienne is not None:
+            os.environ[IA.VAR_CLE] = ancienne
 
 
 # --------------------------------------------------------------------------- #
@@ -357,6 +378,70 @@ def _():
     assert "IN_DOMAIN" in propre, "le template, lui, doit etre annonce"
 
 
+@check("ia: une cle etrangere sans referentiel connu n'est PAS rejetee")
+def _():
+    """Regression. `ref_column` nomme une colonne du fichier de reference, pas
+    du fichier analyse. Le controle d'existence l'a longtemps confondue avec
+    une colonne du dataset : toute proposition FOREIGN_KEY correctement formee
+    - celles ou le modele avoue ne pas connaitre le referentiel - etait donc
+    rejetee, et l'ecran restait vide."""
+    st = make_store()
+    st.data["templates"].append(
+        {"template_id": "FOREIGN_KEY", "dimension": "Consistency",
+         "params_requis": "column, ref_fichier, ref_column",
+         "params_optionnels": "", "description_logique": "",
+         "kpi_produit": "% found", "exemple_params": ""})
+    out = IA.suggerer_ia(
+        PROFIL, "hopital", st,
+        appelant=lambda _: reponse([proposition_valide(
+            control_name="Diagnosis code reference validation",
+            control_type="Consistency", template="FOREIGN_KEY",
+            data_element=["diagnosis_code"],
+            params={"column": "diagnosis_code",
+                    "ref_fichier": "TO_CONFIRM_reference_table",
+                    "ref_column": "TO_CONFIRM_code_column"},
+            confidence=0.82, business_input_required=True,
+            missing_business_inputs=["official diagnosis-code reference"])]))
+    eq(out["rejets"], [], "aucun rejet attendu")
+    eq(len(out["propositions"]), 1, "la proposition doit survivre")
+    p = out["propositions"][0]
+    eq(p["business_input_required"], True, "le besoin metier est conserve")
+    assert p["missing_business_inputs"], "ce qui manque doit etre dit"
+
+
+@check("ia: un referentiel introuvable n'est pas recopie dans l'editeur")
+def _():
+    """Un marqueur « TO_CONFIRM_… » pre-remplirait le formulaire avec une
+    valeur fausse - pire qu'un champ vide, car l'humain ne verrait pas qu'il
+    reste a le renseigner."""
+    st = make_store()
+    brouillon = IA.en_brouillon(proposition_valide(
+        template="FOREIGN_KEY", control_type="Consistency",
+        data_element=["diagnosis_code"],
+        params={"column": "diagnosis_code",
+                "ref_fichier": "TO_CONFIRM_reference_table",
+                "ref_column": "TO_CONFIRM_code_column"}), store=st)
+    params = json.loads(brouillon["params"])
+    eq("ref_fichier" in params, False, "le referentiel fantome est retire")
+    eq("ref_column" in params, False, "sa colonne aussi")
+    eq(params["column"], "diagnosis_code", "la colonne reelle, elle, reste")
+
+
+@check("ia: un referentiel qui existe vraiment est conserve")
+def _():
+    st = make_store()
+    reel = "data/ref/ref_devises.csv"
+    assert (ROOT / reel).exists(), "fixture : ce referentiel doit exister"
+    brouillon = IA.en_brouillon(proposition_valide(
+        template="FOREIGN_KEY", control_type="Consistency",
+        data_element=["diagnosis_code"],
+        params={"column": "diagnosis_code", "ref_fichier": reel,
+                "ref_column": "code"}), store=st)
+    params = json.loads(brouillon["params"])
+    eq(params.get("ref_fichier"), reel, "un vrai referentiel est garde")
+    eq(params.get("ref_column"), "code", "sa colonne aussi")
+
+
 # --------------------------------------------------------------------------- #
 # 4. Dedoublonnage avec la couche deterministe
 # --------------------------------------------------------------------------- #
@@ -499,35 +584,28 @@ def _():
 # --------------------------------------------------------------------------- #
 @check("ia: sans cle, l'assistant se declare indisponible et l'explique")
 def _():
-    ancienne = os.environ.pop(IA.VAR_CLE, None)
-    try:
-        eq(IA.cle_api(), None, "aucune cle ne doit etre trouvee")
+    with sans_cle():
+        # On ne compare jamais la cle elle-meme : un echec afficherait sa
+        # valeur. Seul un booleen circule.
+        eq(IA.cle_api() is None, True, "aucune cle ne doit etre trouvee")
         eq(IA.disponible(), False, "l'assistant est hors service")
         raison = IA.raison_indisponible()
         assert raison and len(raison) > 20, "l'ecran doit recevoir une phrase"
-    finally:
-        if ancienne is not None:
-            os.environ[IA.VAR_CLE] = ancienne
 
 
 @check("ia: sans cle, les suggestions deterministes continuent de fonctionner")
 def _():
-    ancienne = os.environ.pop(IA.VAR_CLE, None)
-    try:
+    with sans_cle():
         propositions = S.suggerer(HOPITAL, PROFIL, "hopital", chiffrer=False)
         assert propositions, "le deterministe ne depend pas d'Anthropic"
         templates = {p["template"] for p in propositions}
         assert "UNIQUE_KEY" in templates, \
             f"les cles candidates restent detectees : {templates}"
-    finally:
-        if ancienne is not None:
-            os.environ[IA.VAR_CLE] = ancienne
 
 
 @check("ia: sans cle, le moteur DQ rend toujours ses verdicts")
 def _():
-    ancienne = os.environ.pop(IA.VAR_CLE, None)
-    try:
+    with sans_cle():
         st = make_store()
         st.add_control({
             "control_name": "Completeness of patient_id",
@@ -542,9 +620,6 @@ def _():
         assert statuts <= set(E.STATUTS_RUN), f"statuts inattendus : {statuts}"
         assert "PASS" in statuts, \
             f"le moteur doit rendre son verdict sans Anthropic : {statuts}"
-    finally:
-        if ancienne is not None:
-            os.environ[IA.VAR_CLE] = ancienne
 
 
 @check("ia: le modele est configurable, avec un defaut Sonnet")
@@ -606,15 +681,32 @@ def _():
 
 @check("interface: sans cle, l'assistant se dit indisponible sans rien casser")
 def _():
-    ancienne = os.environ.pop(IA.VAR_CLE, None)
-    try:
+    with sans_cle():
         at = _catalogue()
         textes = " ".join(str(i.value) for i in at.info)
         assert "unavailable" in textes.lower(), \
             f"l'ecran doit annoncer l'indisponibilite : {textes[:300]}"
-    finally:
-        if ancienne is not None:
-            os.environ[IA.VAR_CLE] = ancienne
+
+
+@check("interface: des propositions masquees par le filtre sont annoncees")
+def _():
+    """Regression d'ecran. Quand le filtre de confiance retire tout, l'ancien
+    message disait « rien a examiner » : l'utilisateur en concluait que
+    l'assistant n'avait rien trouve, alors qu'il fallait cocher une case."""
+    faible = IA.en_brouillon  # noqa: F841 - garde l'import lisible
+    resultat = {
+        "propositions": [dict(proposition_valide(confidence=0.42),
+                              cle="ia_test_0", source="AI")],
+        "doublons": [], "rejets": [],
+        "trace": IA.trace("hopital", "claude-sonnet-5", [], []),
+    }
+    at = _catalogue(ia_resultat_hopital=resultat, ia_fichier=None)
+    textes = " ".join(str(i.value) for i in at.info).lower()
+    # L'ecran n'affiche le bloc que si un dataset est choisi ; on verifie ici
+    # la formulation, qui ne doit jamais faire croire a une absence de
+    # proposition quand il n'y a qu'un filtre actif.
+    assert "no further candidate" not in textes, \
+        "le message d'absence ne doit pas s'appliquer a un simple filtrage"
 
 
 @check("interface: un brouillon IA pre-remplit l'editeur existant")

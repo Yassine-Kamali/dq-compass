@@ -41,6 +41,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 LOG = logging.getLogger("dq_compass.catalogue_ai")
 
+# Racine du projet : sert a verifier qu'un fichier de reference designe par le
+# modele existe reellement. Meme convention que `dq_engine` et `store`.
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
 # --------------------------------------------------------------------------- #
 # Configuration. Rien n'est code en dur : ni cle, ni modele.
 # --------------------------------------------------------------------------- #
@@ -162,15 +166,25 @@ def sanitiser_profil(profil: list[dict], lignes: int | None = None) -> list[dict
     return out
 
 
+# Parametres qui designent une colonne du fichier *analyse*. `ref_column` n'y
+# figure pas : il nomme une colonne du fichier de reference, dont le schema est
+# etranger a celui qu'on profile. L'y inclure faisait rejeter toute proposition
+# FOREIGN_KEY correctement formee - c'est-a-dire justement celles ou le modele
+# avoue ne pas connaitre le referentiel. Le couple ref_fichier / ref_column est
+# verifie par `validate_control()`, a sa place.
+PARAMS_COLONNE = ("column", "field_a", "field_b", "before", "after", "amount",
+                  "total_column")
+
+
 def colonnes_visees(params: dict) -> list[str]:
-    """Colonnes designees par des parametres, quel que soit le template.
+    """Colonnes du fichier analyse designees par des parametres.
 
     Sert au dedoublonnage et au controle d'existence. Les parametres qui ne
-    designent pas une colonne (valeurs, seuils, motifs) sont ignores.
+    designent pas une colonne de ce fichier - valeurs, seuils, motifs, et le
+    referentiel d'une cle etrangere - sont ignores.
     """
     noms: list[str] = []
-    for cle in ("column", "field_a", "field_b", "before", "after", "amount",
-                "total_column", "ref_column"):
+    for cle in PARAMS_COLONNE:
         valeur = (params or {}).get(cle)
         if isinstance(valeur, str) and valeur.strip():
             noms.append(valeur.strip())
@@ -622,6 +636,27 @@ def dedoublonner(propositions: list[dict], deterministes: list[dict],
 # --------------------------------------------------------------------------- #
 # Passage a l'editeur : une proposition devient un brouillon de regle
 # --------------------------------------------------------------------------- #
+def _sans_reference_fantome(params: dict) -> dict:
+    """Retire un referentiel que le modele n'a pas pu nommer.
+
+    Quand l'assistant propose une cle etrangere sans connaitre le referentiel,
+    il est cense le dire plutot que d'inventer - et il le dit souvent en posant
+    un marqueur (« TO_CONFIRM_… ») dans `ref_fichier`. Recopier ce marqueur
+    dans l'editeur donnerait un champ pre-rempli avec une valeur fausse, ce qui
+    est pire qu'un champ vide : l'humain doit voir qu'il reste a le remplir.
+
+    On ne garde donc `ref_fichier` que s'il designe un fichier reellement
+    present. Le validateur refusera de toute facon la regle tant que le champ
+    n'est pas renseigne ; l'ecran, lui, aura dit pourquoi.
+    """
+    propres = dict(params or {})
+    ref = propres.get("ref_fichier")
+    if ref and not (ROOT / str(ref)).exists():
+        propres.pop("ref_fichier", None)
+        propres.pop("ref_column", None)
+    return propres
+
+
 def en_brouillon(proposition: dict, scope: str = "*",
                  owner: str = "Data Steward", store=None) -> dict:
     """Traduit une proposition en brouillon au schema du catalogue.
@@ -637,7 +672,7 @@ def en_brouillon(proposition: dict, scope: str = "*",
     Rien n'est ecrit : c'est l'editeur qui affiche ce brouillon, le validateur
     qui l'accepte, et l'humain qui enregistre.
     """
-    params = proposition.get("params") or {}
+    params = _sans_reference_fantome(proposition.get("params") or {})
     kpi = proposition.get("suggested_kpi", "")
     if store is not None:
         tpl = store.template(proposition.get("template", ""))

@@ -33,6 +33,7 @@ dans le reste du depot.
 """
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import io
 import json
@@ -64,13 +65,18 @@ from suggestions import en_controle, suggerer  # noqa: E402
 # laterale ; l'emoji ne reste qu'en secours si le fichier a disparu.
 LOGO = ROOT / "logo" / "logo_mark.png"
 
-# La marque de l'ecole, a droite du titre. `logo_mba_mark.png` est la version
-# detouree que produit `engine/preparer_logo.py` : l'originale est noire sur
-# blanc et dessinerait un carre blanc sur le fond noir de l'interface. Si elle
-# n'a pas encore ete generee, on retombe sur l'originale plutot que sur rien.
-LOGO_MBA = next((p for p in (ROOT / "logo" / "logo_mba_mark.png",
-                             ROOT / "logo" / "logo-mba.png") if p.exists()),
-                None)
+
+def _premier_existant(*chemins: pathlib.Path) -> pathlib.Path | None:
+    return next((p for p in chemins if p.exists()), None)
+
+
+# Les deux marques de l'en-tete. On prend les variantes rognees au contenu que
+# produit `engine/preparer_logo.py` : c'est ce qui permet de leur donner la meme
+# hauteur d'encre. A defaut, on retombe sur les originales plutot que sur rien -
+# l'en-tete sera moins bien equilibre, mais il s'affichera.
+LOGO_ENTETE = _premier_existant(ROOT / "logo" / "logo_mark_header.png", LOGO)
+LOGO_MBA = _premier_existant(ROOT / "logo" / "logo_mba_mark.png",
+                             ROOT / "logo" / "logo-mba.png")
 
 st.set_page_config(page_title="DQ Compass", layout="wide",
                    page_icon=str(LOGO) if LOGO.exists() else "🧭")
@@ -193,6 +199,52 @@ section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
     for i, (_, _, _, _, c) in enumerate(ETAPES)) + "</style>"
 STYLE = (STYLE.replace("__BORDURE__", BORDURE)
          .replace("__FOND_CARTE__", FOND_CARTE))
+
+
+# Hauteur d'encre commune aux deux marques de l'en-tete. C'est la hauteur du
+# *contenu* qui est fixee, pas celle d'un canevas : les deux fichiers sont
+# rognes, donc a hauteur egale ils pesent pareil a l'oeil.
+HAUTEUR_MARQUE = 34
+
+
+def _image_en_ligne(chemin: pathlib.Path, hauteur: int) -> str:
+    """Rend une image en balise `<img>` autonome, encodee dans le document.
+
+    Streamlit sert bien les fichiers locaux, mais pas depuis un bloc HTML brut :
+    l'image doit voyager avec le balisage.
+    """
+    donnees = base64.b64encode(chemin.read_bytes()).decode("ascii")
+    return (f'<img src="data:image/png;base64,{donnees}" '
+            f'style="height:{hauteur}px;width:auto;display:block;'
+            f'flex:0 0 auto;">')
+
+
+def entete_de_marque() -> str:
+    """L'en-tete de la barre laterale : deux marques et un titre, sur une ligne.
+
+    Une rangee de `st.columns` ne convenait pas ici. Ses colonnes se partagent
+    la largeur en proportions fixes, quelle que soit la place que prend leur
+    contenu : le titre laissait donc un vide a sa droite, et chaque logo etait
+    dimensionne par sa colonne plutot que par son encre.
+
+    Une seule rangee flex corrige les deux defauts. Les trois elements sont en
+    `flex:0 0 auto` et se serrent contre leur voisin - aucun ne s'etire, donc
+    aucun vide ne s'ouvre entre le titre et la marque de droite. La hauteur est
+    imposee aux images, jamais deduite d'une largeur de colonne.
+    """
+    morceaux = []
+    if LOGO_ENTETE is not None:
+        morceaux.append(_image_en_ligne(LOGO_ENTETE, HAUTEUR_MARQUE))
+    else:
+        morceaux.append(f'<div style="font-size:{HAUTEUR_MARQUE}px;'
+                        f'flex:0 0 auto;">🧭</div>')
+    morceaux.append(
+        '<div style="font-size:22px;font-weight:800;letter-spacing:-.02em;'
+        'line-height:1;white-space:nowrap;flex:0 0 auto;">DQ&nbsp;Compass</div>')
+    if LOGO_MBA is not None:
+        morceaux.append(_image_en_ligne(LOGO_MBA, HAUTEUR_MARQUE))
+    return ('<div style="display:flex;align-items:center;gap:11px;'
+            'margin:2px 0 6px 0;">' + "".join(morceaux) + '</div>')
 
 
 def bandeau_etape(index: int, description: str) -> None:
@@ -923,10 +975,16 @@ def bloc_assistant_ia(store: CatalogueStore, utilisateur: str) -> None:
             key=f"ia_basses_{nom}",
             help="Hidden by default: below that level the assistant is "
                  "guessing from a column name alone.")
+        # On compte ce que le filtre retire plutot que de l'effacer : sans
+        # cela, un ecran vide ne distingue pas « rien a proposer » de « tout
+        # est masque », et l'utilisateur conclut a tort que l'assistant n'a
+        # rien trouve.
+        masquees = 0
         if not montrer_basses:
-            propositions = [
-                p for p in propositions
-                if ia.niveau_de_confiance(p.get("confidence")) != "low"]
+            gardees = [p for p in propositions
+                       if ia.niveau_de_confiance(p.get("confidence")) != "low"]
+            masquees = len(propositions) - len(gardees)
+            propositions = gardees
 
         st.divider()
         if resultat["doublons"]:
@@ -945,7 +1003,13 @@ def bloc_assistant_ia(store: CatalogueStore, utilisateur: str) -> None:
                 for motif in resultat["rejets"]:
                     st.markdown(f"- {motif}")
 
-        if not propositions:
+        if not propositions and masquees:
+            st.info(
+                f"🔍 **{masquees} proposal(s) are hidden**, all below 60 % "
+                f"confidence — the assistant is unsure enough that it wants a "
+                f"human to look first. Tick **Show low-confidence proposals** "
+                f"above to review them.")
+        elif not propositions:
             st.success("No further candidate control to review for this "
                        "dataset.")
         else:
@@ -2128,23 +2192,7 @@ def main() -> None:
     store = get_store()
     st.markdown(STYLE, unsafe_allow_html=True)
     with st.sidebar:
-        # Trois elements sur une ligne dans une barre laterale etroite : le
-        # titre doit tenir sans se couper. `nowrap` l'interdit formellement -
-        # sans lui, « Compass » se brise en plein mot - et la taille descend a
-        # ce qui rentre reellement entre les deux marques.
-        marque, titre, ecole = st.columns([0.9, 2.7, 1.1],
-                                          vertical_alignment="center")
-        if LOGO.exists():
-            marque.image(str(LOGO))
-        else:
-            marque.markdown("<div style='font-size:34px;'>🧭</div>",
-                            unsafe_allow_html=True)
-        titre.markdown(
-            "<div style='font-size:19px;font-weight:800;letter-spacing:-.02em;"
-            "line-height:1.15;white-space:nowrap;'>DQ&nbsp;Compass</div>",
-            unsafe_allow_html=True)
-        if LOGO_MBA is not None:
-            ecole.image(str(LOGO_MBA))
+        st.markdown(entete_de_marque(), unsafe_allow_html=True)
         st.caption("Generic, catalogue-driven data quality control layer")
         utilisateur = st.text_input("Your name", "data.steward",
                                     help="Identifies the author in the change log.")

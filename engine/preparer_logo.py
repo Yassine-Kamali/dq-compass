@@ -28,6 +28,13 @@ CIBLE = ROOT / "logo" / "logo_mark.png"
 SOURCE_MBA = ROOT / "logo" / "logo-mba.png"
 CIBLE_MBA = ROOT / "logo" / "logo_mba_mark.png"
 
+# Variante rognee de l'embleme, pour l'en-tete de la barre laterale.
+# `logo_mark.png` est un carre : c'est ce qu'il faut a une icone d'onglet, mais
+# ses 17 % de marge transparente font paraitre l'encre plus petite que la marque
+# posee a cote. Sur une ligne ou deux logos doivent peser pareil, on compare des
+# contenus, pas des canevas.
+CIBLE_ENTETE = ROOT / "logo" / "logo_mark_header.png"
+
 # En deca de cette luminance, un pixel est de l'encre sombre a eclaircir. Au-
 # dessus, c'est soit du fond, soit une couleur de marque qu'on laisse tranquille.
 ENCRE_SOMBRE = 110.0
@@ -139,6 +146,12 @@ def main() -> None:
                           (cote - embleme.size[1]) // 2))
     carre.resize((COTE, COTE), Image.LANCZOS).save(CIBLE)
     print(f"{CIBLE.relative_to(ROOT)} ecrit ({COTE}x{COTE}, fond transparent)")
+
+    entete = rogner_au_contenu(embleme)
+    entete.save(CIBLE_ENTETE)
+    print(f"{CIBLE_ENTETE.relative_to(ROOT)} ecrit "
+          f"({entete.size[0]}x{entete.size[1]}, rogne au contenu)")
+
     preparer_mba()
 
 

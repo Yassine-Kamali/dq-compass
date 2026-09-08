@@ -1,0 +1,7 @@
+article_id,libelle,code_devise,quantite,prix_unitaire,date_inventaire
+ART-001,Vis M6,EUR,120,0.12,2026-08-31
+ART-002,Ecrou M6,EUR,340,0.08,2026-08-31
+ART-003,Rondelle,USD,75,0.03,2026-08-31
+,Boulon M8,EUR,12,0.45,2026-08-31
+ART-002,Ecrou M6,EUR,340,0.08,2026-08-31
+ART-006,Cheville,ZZZ,-5,0.22,2026-08-31

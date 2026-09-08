@@ -11,8 +11,26 @@ ligne de code.
 
 ## Démarrer
 
+### Depuis un clone
+
 ```bash
-# depuis c:/Users/yassi/Desktop/DQ Project
+git clone https://github.com/Yassine-Kamali/dq-compass.git
+cd dq-compass
+python -m venv .venv
+./.venv/Scripts/pip install -r requirements.txt      # Windows
+# .venv/bin/pip install -r requirements.txt          # macOS / Linux
+
+./.venv/Scripts/python.exe engine/prepare_bis.py     # extrait le zip et prépare les données
+./.venv/Scripts/python.exe tests/test_dq.py          # 46 tests, doit finir à 46/46
+```
+
+Seul le zip source (4,8 Mo) est versionné. `prepare_bis.py` l'extrait au premier
+lancement et régénère les 112 Mo de données préparées en une quinzaine de
+secondes, avec des empreintes SHA-256 identiques d'une machine à l'autre.
+
+### Au quotidien
+
+```bash
 ./.venv/Scripts/python.exe engine/prepare_bis.py            # préparer les données (une fois)
 ./.venv/Scripts/python.exe reporting/excel_report.py        # run + classeur Excel
 ./.venv/Scripts/python.exe -m streamlit run ui/app.py       # interface

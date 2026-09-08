@@ -25,6 +25,26 @@ STORE_PATH = ROOT / "catalogue" / "store.json"
 STATUTS = ["Actif", "Suspendu", "Deprecie"]
 SEVERITES = ["Critical", "High", "Medium", "Low"]
 
+# Vocabulaire metier. Personne hors DSI ne sait ce que "Critical" implique ;
+# "Bloquant" se comprend sans glossaire.
+SEVERITES_LIBELLES = {
+    "Critical": "Bloquant",
+    "High": "Important",
+    "Medium": "Moyen",
+    "Low": "Mineur",
+}
+STATUTS_LIBELLES = {
+    "Actif": "En service",
+    "Suspendu": "En pause",
+    "Deprecie": "Retire",
+}
+SEVERITES_AIDE = {
+    "Critical": "Le fichier ne doit pas etre publie tant que l'ecart persiste.",
+    "High": "A traiter avant la prochaine diffusion.",
+    "Medium": "A instruire, sans bloquer la diffusion.",
+    "Low": "Signale pour information.",
+}
+
 # Changing one of these changes what the engine executes -> version bump.
 EXECUTABLE_FIELDS = {"template", "params", "dataset_scope", "seuil_tolerance_pct", "statut"}
 
@@ -172,6 +192,65 @@ class CatalogueStore:
         if dataset is not None:
             out = [c for c in out if scope_matches(c.get("dataset_scope", ""), dataset)]
         return out
+
+
+class _Souple(dict):
+    """Formatage tolerant : un parametre absent devient '…' au lieu de lever."""
+
+    def __missing__(self, cle: str) -> str:
+        return "…"
+
+
+def _gabarit(tpl: dict, params: dict) -> str:
+    """Choisit la formulation la plus precise que le template propose.
+
+    Un template peut declarer plusieurs variantes de phrase : `phrase_<sens>`
+    pour un mode d'execution, `phrase_role` pour un ciblage par role, et
+    `phrase_min` / `phrase_max` pour une borne unique. La plus specifique gagne.
+    """
+    sens = params.get("sens")
+    if sens and tpl.get(f"phrase_{sens}"):
+        return tpl[f"phrase_{sens}"]
+    if "role" in params and tpl.get("phrase_role"):
+        return tpl["phrase_role"]
+    if "min" in params and "max" not in params and tpl.get("phrase_min"):
+        return tpl["phrase_min"]
+    if "max" in params and "min" not in params and tpl.get("phrase_max"):
+        return tpl["phrase_max"]
+    return tpl.get("phrase", "")
+
+
+def phrase_controle(control: dict, store: "CatalogueStore") -> str:
+    """Rend un controle en une phrase francaise, lisible sans culture data."""
+    tpl = store.template(control.get("template", ""))
+    if tpl is None:
+        return control.get("description", "") or control.get("control_name", "")
+    try:
+        params = json.loads(control.get("params") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return control.get("description", "")
+
+    lisibles = {}
+    for cle, valeur in params.items():
+        if isinstance(valeur, list):
+            lisibles[cle] = ", ".join(str(v) for v in valeur)
+        elif isinstance(valeur, float) and valeur.is_integer():
+            lisibles[cle] = str(int(valeur))
+        else:
+            lisibles[cle] = str(valeur)
+
+    gabarit = _gabarit(tpl, params)
+    if not gabarit:
+        return control.get("description", "") or tpl.get("libelle_metier", "")
+    return gabarit.format_map(_Souple(lisibles))
+
+
+def libelle_severite(severity: str) -> str:
+    return SEVERITES_LIBELLES.get(severity, severity or "")
+
+
+def libelle_statut(statut: str) -> str:
+    return STATUTS_LIBELLES.get(statut, statut or "")
 
 
 def scope_matches(scope: str, dataset: str) -> bool:

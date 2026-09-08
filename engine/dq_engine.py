@@ -5,13 +5,18 @@ Reads control definitions from the catalogue store and executes them against
 any declared dataset. The engine knows no column name, no threshold and no
 dataset: everything comes from the catalogue.
 
+One run controls ONE file. The contract to apply is detected from the columns
+present in the file, or imposed by the caller. Reference tables are not files
+the user picks: the engine fetches them on its own when a referential
+integrity control needs one.
+
 Execution is a three-phase pipeline, in this order and never merged:
   1. VALIDATE  - reject malformed controls before touching any data
   2. EXECUTE   - run the accepted controls, collect KPIs and exceptions
   3. EVIDENCE  - write a self-contained, replayable evidence pack
 
 Public entry point:
-    run_dq(datasets=["bis_turnover"], store=..., run_label="...") -> RunResult
+    run_dq("data/prepared/bis_turnover.csv", store=..., run_label="...") -> RunResult
 """
 from __future__ import annotations
 
@@ -85,6 +90,8 @@ class RunResult:
     manifeste: dict
     evidence_path: pathlib.Path | None = None
     journal: list[str] = field(default_factory=list)
+    fichier: str = ""                # le fichier controle par ce run
+    contrat: str = ""                # le contrat de dataset applique
 
     @property
     def scorecard(self) -> pd.DataFrame:
@@ -525,10 +532,58 @@ EXECUTORS: dict[str, Callable] = {
 
 
 # --------------------------------------------------------------------------- #
-# Dataset loading
+# Chargement du fichier a controler
+#
+# Un run porte sur UN fichier. Les referentiels ne sont pas des fichiers a
+# choisir : ce sont des tables de support que le moteur va chercher tout seul
+# quand un controle d'integrite referentielle en a besoin.
 # --------------------------------------------------------------------------- #
+FORMATS_SUPPORTES = {".csv", ".txt", ".xlsx", ".xlsm", ".xls"}
+
+
+class ContratIntrouvable(Exception):
+    """Aucun contrat du catalogue ne correspond aux colonnes du fichier."""
+
+    def __init__(self, message: str, candidats: list[tuple[str, float]]):
+        super().__init__(message)
+        self.candidats = candidats
+
+
+def charger_fichier(path: pathlib.Path | str) -> pd.DataFrame:
+    """Lit un CSV ou un classeur Excel. Le format vient de l'extension."""
+    path = pathlib.Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Fichier introuvable : {path}")
+    suffixe = path.suffix.lower()
+    if suffixe not in FORMATS_SUPPORTES:
+        raise ValueError(
+            f"Format '{suffixe}' non pris en charge. "
+            f"Attendu : {', '.join(sorted(FORMATS_SUPPORTES))}")
+    if suffixe in (".xlsx", ".xlsm", ".xls"):
+        return pd.read_excel(path)
+    return pd.read_csv(path, low_memory=False)
+
+
+def detecter_contrat(colonnes, store: CatalogueStore) -> list[tuple[str, float]]:
+    """Classe les contrats du catalogue par taux de recouvrement des colonnes.
+
+    Le score est la part des colonnes declarees au contrat que le fichier
+    contient reellement. Un fichier large ne peut donc pas matcher par hasard
+    un petit referentiel.
+    """
+    presentes = {str(c) for c in colonnes}
+    scores: list[tuple[str, float]] = []
+    for nom in store.datasets:
+        declarees = [c["colonne"] for c in store.columns_of(nom)]
+        if not declarees:
+            continue
+        trouvees = sum(1 for c in declarees if c in presentes)
+        scores.append((nom, round(trouvees / len(declarees), 4)))
+    return sorted(scores, key=lambda t: (-t[1], t[0]))
+
+
 class DatasetLoader:
-    """Loads a dataset declared in the catalogue, once, and hashes its source."""
+    """Charge les referentiels declares au catalogue, une fois, et les empreinte."""
 
     def __init__(self, store: CatalogueStore, root: pathlib.Path = ROOT):
         self.store, self.root = store, root
@@ -541,22 +596,25 @@ class DatasetLoader:
             raise KeyError(f"Dataset '{name}' absent du catalogue")
         return self.root / definition["source"]
 
-    def load(self, name: str) -> pd.DataFrame:
-        if name in self._cache:
-            return self._cache[name]
-        path = self.path_of(name)
-        if not path.exists():
-            raise FileNotFoundError(f"Source introuvable pour '{name}' : {path}")
-        df = pd.read_csv(path, low_memory=False)
+    def enregistrer(self, name: str, df: pd.DataFrame, path: pathlib.Path) -> None:
         self._cache[name] = df
         self.hashes[name] = {
-            "chemin": str(path.relative_to(self.root)).replace("\\", "/"),
+            "chemin": str(path).replace("\\", "/"),
             "sha256": sha256_file(path),
             "lignes": len(df),
             "colonnes": len(df.columns),
             "modifie_le": dt.datetime.fromtimestamp(path.stat().st_mtime).isoformat(
                 timespec="seconds"),
         }
+
+    def load(self, name: str) -> pd.DataFrame:
+        if name in self._cache:
+            return self._cache[name]
+        path = self.path_of(name)
+        if not path.exists():
+            raise FileNotFoundError(f"Referentiel introuvable pour '{name}' : {path}")
+        df = charger_fichier(path)
+        self.enregistrer(name, df, path)
         return df
 
     def id_column(self, name: str) -> str | None:
@@ -567,113 +625,133 @@ class DatasetLoader:
 
 
 # --------------------------------------------------------------------------- #
-# Phase 2/3 - Runner
+# Phase 2/3 - Runner : un fichier, un contrat, un rapport
 # --------------------------------------------------------------------------- #
-def run_dq(datasets: list[str] | None = None,
+def run_dq(fichier: pathlib.Path | str,
+           dataset: str | None = None,
            store: CatalogueStore | None = None,
            run_label: str = "",
            write_evidence: bool = True,
            as_of: dt.date | None = None,
-           root: pathlib.Path = ROOT) -> RunResult:
+           root: pathlib.Path = ROOT,
+           seuil_detection: float = 0.7) -> RunResult:
+    """Controle un fichier unique.
+
+    `dataset` nomme le contrat a appliquer. S'il est omis, le contrat est
+    detecte a partir des colonnes presentes dans le fichier.
+    """
     store = store or load_store()
-    datasets = datasets or list(store.datasets.keys())
     as_of = as_of or dt.date.today()
+    fichier = pathlib.Path(fichier)
     run_id = f"RUN-{dt.datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
     started = time.perf_counter()
     journal: list[str] = []
 
     def log(msg: str) -> None:
-        line = f"{dt.datetime.now():%H:%M:%S} | {msg}"
-        journal.append(line)
+        journal.append(f"{dt.datetime.now():%H:%M:%S} | {msg}")
 
-    log(f"Demarrage {run_id} | moteur {ENGINE_VERSION} | datasets={datasets}")
+    log(f"Demarrage {run_id} | moteur {ENGINE_VERSION}")
+    log(f"Fichier : {fichier.name}")
+
+    df = charger_fichier(fichier)
+    log(f"Charge : {len(df):,} lignes, {len(df.columns)} colonnes")
+
+    candidats = detecter_contrat(df.columns, store)
+    if dataset is None:
+        if not candidats or candidats[0][1] < seuil_detection:
+            meilleur = f"{candidats[0][0]} ({candidats[0][1]:.0%})" if candidats else "aucun"
+            raise ContratIntrouvable(
+                f"Aucun contrat ne correspond aux colonnes de {fichier.name}. "
+                f"Meilleur candidat : {meilleur}, sous le seuil de "
+                f"{seuil_detection:.0%}. Declarez le contrat de ce fichier "
+                f"dans l'ecran Datasets.", candidats)
+        dataset = candidats[0][0]
+        log(f"Contrat detecte : {dataset} "
+            f"({dict(candidats)[dataset]:.0%} des colonnes declarees presentes)")
+    else:
+        if store.dataset(dataset) is None:
+            raise ContratIntrouvable(f"Contrat inconnu : '{dataset}'", candidats)
+        log(f"Contrat impose : {dataset} ({dict(candidats).get(dataset, 0):.0%})")
+
     loader = DatasetLoader(store, root)
+    loader.enregistrer(dataset, df, fichier)
     resultats: list[ControlResult] = []
     rejets: list[dict] = []
     frames: list[pd.DataFrame] = []
 
-    for dataset in datasets:
-        try:
-            df = loader.load(dataset)
-        except (KeyError, FileNotFoundError) as exc:
-            log(f"[{dataset}] IGNORE : {exc}")
-            rejets.append({"rule_id": "-", "dataset": dataset, "motif": str(exc)})
+    ctx = {
+        "load_dataset": loader.load,
+        "id_column": loader.id_column(dataset),
+        "as_of": as_of,
+        "store": store,
+        "dataset": dataset,
+    }
+
+    applicables = [c for c in store.controls
+                   if c.get("statut") == "Actif"
+                   and scope_matches(c.get("dataset_scope", ""), dataset)]
+    log(f"{len(applicables)} controle(s) actif(s) s'appliquent a ce contrat")
+
+    for control in applicables:
+        errors = validate_control(control, store, dataset)
+        if errors:
+            for err in errors:
+                rejets.append({"rule_id": control["rule_id"], "dataset": dataset,
+                               "control_name": control.get("control_name", ""),
+                               "motif": err})
+            log(f"{control['rule_id']} REJETE : {errors[0]}")
             continue
-        log(f"[{dataset}] charge : {len(df):,} lignes, {len(df.columns)} colonnes")
 
-        ctx = {
-            "load_dataset": loader.load,
-            "id_column": loader.id_column(dataset),
-            "as_of": as_of,
-            "store": store,
-            "dataset": dataset,
-        }
+        params = parse_params(control["params"])
+        targets = resolve_targets(control["template"], params, store, dataset)
+        executor = EXECUTORS[control["template"]]
 
-        for control in store.controls:
-            if control.get("statut") != "Actif":
-                continue
-            if not scope_matches(control.get("dataset_scope", ""), dataset):
-                continue
+        for target in targets:
+            t0 = time.perf_counter()
+            cible = " + ".join(target) if target else params.get("expression", "-")
+            try:
+                n, ko, kpi, kpi_nom, exc = executor(df, params, target, ctx)
+                seuil = float(control.get("seuil_tolerance_pct") or 0)
+                taux = round(100.0 * ko / n, 4) if n else 0.0
+                statut = "NON_APPLICABLE" if n == 0 else ("PASS" if taux <= seuil else "FAIL")
+                message = ""
+            except Exception as exc_obj:  # noqa: BLE001 - reporte, jamais avale
+                n = ko = 0
+                kpi, kpi_nom, taux, seuil = -1, "-", 0.0, 0.0
+                statut, message = "ERREUR", f"{type(exc_obj).__name__}: {exc_obj}"
+                exc = pd.DataFrame()
+                log(f"{control['rule_id']} ERREUR : {message}")
 
-            errors = validate_control(control, store, dataset)
-            if errors:
-                for err in errors:
-                    rejets.append({"rule_id": control["rule_id"], "dataset": dataset,
-                                   "control_name": control.get("control_name", ""),
-                                   "motif": err})
-                log(f"[{dataset}] {control['rule_id']} REJETE : {errors[0]}")
-                continue
+            if not exc.empty:
+                exc.insert(0, "dataset", dataset)
+                exc.insert(0, "rule_id", control["rule_id"])
+                exc.insert(2, "severity", control.get("severity", ""))
+                frames.append(exc)
 
-            params = parse_params(control["params"])
-            targets = resolve_targets(control["template"], params, store, dataset)
-            executor = EXECUTORS[control["template"]]
-
-            for target in targets:
-                t0 = time.perf_counter()
-                cible = " + ".join(target) if target else params.get("expression", "-")
-                try:
-                    n, ko, kpi, kpi_nom, exc = executor(df, params, target, ctx)
-                    seuil = float(control.get("seuil_tolerance_pct") or 0)
-                    taux = round(100.0 * ko / n, 4) if n else 0.0
-                    statut = "NON_APPLICABLE" if n == 0 else (
-                        "PASS" if taux <= seuil else "FAIL")
-                    message = ""
-                except Exception as exc_obj:  # noqa: BLE001 - reported, never swallowed
-                    n = ko = 0
-                    kpi, kpi_nom, taux, seuil = -1, "-", 0.0, 0.0
-                    statut, message, exc = "ERREUR", f"{type(exc_obj).__name__}: {exc_obj}", pd.DataFrame()
-                    log(f"[{dataset}] {control['rule_id']} ERREUR : {message}")
-
-                if not exc.empty:
-                    exc.insert(0, "dataset", dataset)
-                    exc.insert(0, "rule_id", control["rule_id"])
-                    exc.insert(2, "severity", control.get("severity", ""))
-                    frames.append(exc)
-
-                resultats.append(ControlResult(
-                    rule_id=control["rule_id"],
-                    control_name=control.get("control_name", ""),
-                    dimension=control.get("control_type", ""),
-                    template=control["template"],
-                    dataset=dataset,
-                    cible=cible,
-                    statut=statut,
-                    lignes_testees=int(n),
-                    lignes_ko=int(ko),
-                    taux_ko_pct=taux,
-                    kpi_nom=kpi_nom,
-                    kpi_valeur=kpi,
-                    seuil_pct=float(control.get("seuil_tolerance_pct") or 0),
-                    severity=control.get("severity", ""),
-                    owner=control.get("owner", ""),
-                    frequency=control.get("frequency", ""),
-                    remediation_action=control.get("remediation_action", ""),
-                    version=int(control.get("version", 1)),
-                    duree_s=round(time.perf_counter() - t0, 3),
-                    message=message,
-                ))
-                log(f"[{dataset}] {control['rule_id']} {cible[:40]:<40} {statut:<14} "
-                    f"{kpi_nom}={kpi} ({ko}/{n} KO)")
+            resultats.append(ControlResult(
+                rule_id=control["rule_id"],
+                control_name=control.get("control_name", ""),
+                dimension=control.get("control_type", ""),
+                template=control["template"],
+                dataset=dataset,
+                cible=cible,
+                statut=statut,
+                lignes_testees=int(n),
+                lignes_ko=int(ko),
+                taux_ko_pct=taux,
+                kpi_nom=kpi_nom,
+                kpi_valeur=kpi,
+                seuil_pct=float(control.get("seuil_tolerance_pct") or 0),
+                severity=control.get("severity", ""),
+                owner=control.get("owner", ""),
+                frequency=control.get("frequency", ""),
+                remediation_action=control.get("remediation_action", ""),
+                version=int(control.get("version", 1)),
+                duree_s=round(time.perf_counter() - t0, 3),
+                message=message,
+            ))
+            log(f"{control['rule_id']} {cible[:40]:<40} {statut:<14} "
+                f"{kpi_nom}={kpi} ({ko}/{n} KO)")
 
     exceptions = (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
         columns=["rule_id", "dataset", "severity", "index_source",
@@ -694,7 +772,10 @@ def run_dq(datasets: list[str] | None = None,
         "python": platform.python_version(),
         "pandas": pd.__version__,
         "machine": platform.node(),
-        "datasets_executes": datasets,
+        "fichier_controle": str(fichier).replace("\\", "/"),
+        "contrat_applique": dataset,
+        "detection": candidats[:5],
+        "datasets_executes": [dataset],
         "sources": loader.hashes,
         "catalogue_sha256": sha256_obj(catalogue_snapshot),
         "controles_actifs": len(store.active_controls()),
@@ -705,12 +786,14 @@ def run_dq(datasets: list[str] | None = None,
         run_id=run_id,
         horodatage=manifeste["horodatage"],
         libelle=run_label,
-        datasets=datasets,
+        datasets=[dataset],
         resultats=resultats,
         exceptions=exceptions,
         rejets=rejets,
         manifeste=manifeste,
         journal=journal,
+        fichier=str(fichier),
+        contrat=dataset,
     )
     log(f"Termine en {manifeste['duree_totale_s']}s | {result.summary()}")
 
@@ -738,8 +821,17 @@ def write_evidence_pack(result: RunResult, catalogue_snapshot: dict) -> pathlib.
 
 
 def main(argv: list[str]) -> int:
-    datasets = argv[1:] or ["bis_turnover_demo", "ref_devises", "ref_pays"]
-    res = run_dq(datasets=datasets, run_label="Execution en ligne de commande")
+    fichier = argv[1] if len(argv) > 1 else "data/prepared/bis_turnover.csv"
+    contrat = argv[2] if len(argv) > 2 else None
+    try:
+        res = run_dq(fichier, dataset=contrat,
+                     run_label="Execution en ligne de commande")
+    except ContratIntrouvable as exc:
+        print(f"ERREUR : {exc}")
+        print("Contrats les plus proches :")
+        for nom, score in exc.candidats[:5]:
+            print(f"  {score:6.0%}  {nom}")
+        return 2
     print("\n".join(res.journal))
     print("\n--- SYNTHESE ---")
     print(json.dumps(res.summary(), indent=2))

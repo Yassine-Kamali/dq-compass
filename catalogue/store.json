@@ -2,7 +2,7 @@
   "meta": {
     "schema": "1.0",
     "libelle": "DQ Compass - catalogue de controles",
-    "updated_at": "2026-09-07T17:04:27"
+    "updated_at": "2026-09-08T09:54:38"
   },
   "templates": [
     {
@@ -12,7 +12,18 @@
       "params_optionnels": "",
       "description_logique": "Aucune valeur nulle ou vide sur la colonne ciblee",
       "kpi_produit": "% de completude",
-      "exemple_params": "{\"column\": \"turnover_notionnel\"}"
+      "exemple_params": "{\"column\": \"turnover_notionnel\"}",
+      "libelle_metier": "Ne jamais être vide",
+      "question_metier": "Quelle information ne doit jamais manquer ?",
+      "explication": "Le contrôle échoue si des lignes n'ont aucune valeur dans cette colonne.",
+      "exemple_metier": "Chaque opération doit porter un montant.",
+      "phrase": "La colonne « {column} » doit être renseignée sur chaque ligne.",
+      "phrase_role": "Toute information de type « {role} » doit être renseignée.",
+      "params_libelles": {
+        "column": "Colonne qui doit toujours être remplie",
+        "role": "Type d'information concerné"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "MATCHES_REGEX",
@@ -21,7 +32,17 @@
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La valeur respecte une expression reguliere",
       "kpi_produit": "% de valeurs valides",
-      "exemple_params": "{\"column\": \"DER_CURR_LEG1\", \"pattern\": \"^[A-Z]{3}$\"}"
+      "exemple_params": "{\"column\": \"DER_CURR_LEG1\", \"pattern\": \"^[A-Z]{3}$\"}",
+      "libelle_metier": "Respecter un format précis",
+      "question_metier": "Quel format cette information doit-elle respecter ?",
+      "explication": "Le contrôle échoue si la valeur ne suit pas le format attendu.",
+      "exemple_metier": "Un code devise s'écrit avec exactement trois lettres majuscules, comme EUR ou USD.",
+      "phrase": "La colonne « {column} » doit respecter le format {pattern}.",
+      "params_libelles": {
+        "column": "Colonne à vérifier",
+        "pattern": "Format attendu (expression régulière)"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "IN_DOMAIN",
@@ -30,7 +51,17 @@
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La valeur appartient a une liste fermee",
       "kpi_produit": "% de valeurs valides",
-      "exemple_params": "{\"column\": \"DER_BASIS\", \"values\": [\"A\", \"B\", \"C\"]}"
+      "exemple_params": "{\"column\": \"DER_BASIS\", \"values\": [\"A\", \"B\", \"C\"]}",
+      "libelle_metier": "Faire partie d'une liste autorisée",
+      "question_metier": "Quelles sont les seules valeurs acceptées ?",
+      "explication": "Le contrôle échoue dès qu'une valeur sort de la liste.",
+      "exemple_metier": "Un type de contrat ne peut être que CDI, CDD ou Stage.",
+      "phrase": "La colonne « {column} » ne peut contenir que : {values}.",
+      "params_libelles": {
+        "column": "Colonne à vérifier",
+        "values": "Liste des valeurs autorisées"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "RANGE",
@@ -39,7 +70,20 @@
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La valeur numerique est comprise dans l'intervalle",
       "kpi_produit": "% de valeurs dans la plage",
-      "exemple_params": "{\"column\": \"turnover_notionnel\", \"min\": 0}"
+      "exemple_params": "{\"column\": \"turnover_notionnel\", \"min\": 0}",
+      "libelle_metier": "Rester dans des bornes chiffrées",
+      "question_metier": "Entre quelles valeurs ce nombre doit-il rester ?",
+      "explication": "Le contrôle échoue si un nombre sort de l'intervalle. Les cases vides sont ignorées.",
+      "exemple_metier": "Un montant ne peut pas être négatif.",
+      "phrase": "La colonne « {column} » doit rester entre {min} et {max}.",
+      "params_libelles": {
+        "column": "Colonne chiffrée à vérifier",
+        "min": "Valeur minimale acceptée",
+        "max": "Valeur maximale acceptée"
+      },
+      "niveau": "simple",
+      "phrase_min": "La colonne « {column} » doit être supérieure ou égale à {min}.",
+      "phrase_max": "La colonne « {column} » doit être inférieure ou égale à {max}."
     },
     {
       "template_id": "UNIQUE_KEY",
@@ -48,7 +92,18 @@
       "params_optionnels": "",
       "description_logique": "Aucun doublon sur la cle composee",
       "kpi_produit": "taux de doublons",
-      "exemple_params": "{\"role\": \"cle_primaire\"}"
+      "exemple_params": "{\"role\": \"cle_primaire\"}",
+      "libelle_metier": "Ne pas contenir de doublon",
+      "question_metier": "Qu'est-ce qui doit être unique dans le fichier ?",
+      "explication": "Le contrôle échoue si deux lignes portent la même valeur.",
+      "exemple_metier": "Un même numéro de facture ne peut pas apparaître deux fois.",
+      "phrase": "Deux lignes ne peuvent pas avoir le même « {columns} ».",
+      "phrase_role": "Les identifiants de type « {role} » doivent être uniques.",
+      "params_libelles": {
+        "columns": "Colonne(s) qui identifient une ligne de façon unique",
+        "role": "Type d'identifiant concerné"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "FOREIGN_KEY",
@@ -57,7 +112,18 @@
       "params_optionnels": "ignorer_nulls",
       "description_logique": "Toute valeur existe dans le referentiel cible (integrite referentielle)",
       "kpi_produit": "% de valeurs rattachees",
-      "exemple_params": "{\"column\": \"DER_CURR_LEG1\", \"ref_dataset\": \"ref_devises\", \"ref_column\": \"code_devise\"}"
+      "exemple_params": "{\"column\": \"DER_CURR_LEG1\", \"ref_dataset\": \"ref_devises\", \"ref_column\": \"code_devise\"}",
+      "libelle_metier": "Exister dans un référentiel",
+      "question_metier": "Quel code doit être reconnu par un référentiel ?",
+      "explication": "Le contrôle échoue si un code du fichier est introuvable dans la table de référence.",
+      "exemple_metier": "Toute devise citée doit figurer au référentiel des devises.",
+      "phrase": "Chaque « {column} » doit exister dans le référentiel « {ref_dataset} ».",
+      "params_libelles": {
+        "column": "Colonne du fichier à rattacher",
+        "ref_dataset": "Référentiel de rattachement",
+        "ref_column": "Colonne du référentiel qui porte le code"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "FIELD_EQUALS",
@@ -66,7 +132,17 @@
       "params_optionnels": "ignorer_nulls",
       "description_logique": "Deux champs portent la meme valeur",
       "kpi_produit": "% de lignes coherentes",
-      "exemple_params": "{\"field_a\": \"annee\", \"field_b\": \"annee_derivee\"}"
+      "exemple_params": "{\"field_a\": \"annee\", \"field_b\": \"annee_derivee\"}",
+      "libelle_metier": "Concorder avec une autre colonne",
+      "question_metier": "Quelles deux colonnes doivent porter la même valeur ?",
+      "explication": "Le contrôle échoue si les deux colonnes divergent.",
+      "exemple_metier": "Le total repris en pied de fichier doit égaler le total calculé.",
+      "phrase": "« {field_a} » et « {field_b} » doivent porter la même valeur.",
+      "params_libelles": {
+        "field_a": "Première colonne",
+        "field_b": "Seconde colonne"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "DATE_ORDER",
@@ -75,7 +151,17 @@
       "params_optionnels": "ignorer_nulls",
       "description_logique": "La date 'before' est anterieure ou egale a la date 'after'",
       "kpi_produit": "% de lignes coherentes",
-      "exemple_params": "{\"before\": \"date_debut\", \"after\": \"date_fin\"}"
+      "exemple_params": "{\"before\": \"date_debut\", \"after\": \"date_fin\"}",
+      "libelle_metier": "Respecter l'ordre chronologique",
+      "question_metier": "Quelle date doit venir avant l'autre ?",
+      "explication": "Le contrôle échoue si les deux dates sont inversées.",
+      "exemple_metier": "Une date d'entrée précède toujours une date de sortie.",
+      "phrase": "« {before} » doit être antérieure ou égale à « {after} ».",
+      "params_libelles": {
+        "before": "Date qui doit venir en premier",
+        "after": "Date qui doit venir en second"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "FRESHNESS",
@@ -84,7 +170,17 @@
       "params_optionnels": "",
       "description_logique": "L'observation la plus recente date de moins de N jours",
       "kpi_produit": "age maximum en jours",
-      "exemple_params": "{\"column\": \"date_observation\", \"max_lag_days\": 1460}"
+      "exemple_params": "{\"column\": \"date_observation\", \"max_lag_days\": 1460}",
+      "libelle_metier": "Être suffisamment récent",
+      "question_metier": "Quel âge maximal la donnée peut-elle avoir ?",
+      "explication": "Le contrôle échoue si la donnée la plus récente est trop ancienne.",
+      "exemple_metier": "Un fichier mis à jour tous les mois ne doit pas dater de plus de 45 jours.",
+      "phrase": "La donnée la plus récente de « {column} » doit dater de moins de {max_lag_days} jours.",
+      "params_libelles": {
+        "column": "Colonne de date à surveiller",
+        "max_lag_days": "Ancienneté maximale tolérée, en jours"
+      },
+      "niveau": "simple"
     },
     {
       "template_id": "SUM_RECONCILIATION",
@@ -93,7 +189,24 @@
       "params_optionnels": "tolerance_pct, sens, couverture_min_pct",
       "description_logique": "Compare un total declare a la somme de ses composantes. sens = parties_max | couverture_min | bilateral",
       "kpi_produit": "ecart relatif en %",
-      "exemple_params": "{\"amount\": \"turnover_notionnel\", \"group_by\": [\"annee\"], \"total_column\": \"DER_REP_CTY\", \"total_value\": \"5J\"}"
+      "exemple_params": "{\"amount\": \"turnover_notionnel\", \"group_by\": [\"annee\"], \"total_column\": \"DER_REP_CTY\", \"total_value\": \"5J\"}",
+      "libelle_metier": "Faire un total cohérent",
+      "question_metier": "Quel total doit correspondre à la somme de ses parties ?",
+      "explication": "Le contrôle compare une ligne de total au cumul de ses composantes, et signale les écarts.",
+      "exemple_metier": "Le chiffre d'affaires « toutes régions » doit égaler la somme des régions.",
+      "phrase": "Le total « {total_value} » de « {total_column} » doit correspondre à la somme de « {amount} ».",
+      "params_libelles": {
+        "amount": "Colonne du montant à cumuler",
+        "total_column": "Colonne qui porte la ligne de total",
+        "total_value": "Valeur qui désigne le total",
+        "group_by": "Dimensions à figer pour comparer",
+        "sens": "Ce qui constitue un écart inacceptable",
+        "tolerance_pct": "Écart toléré, en %",
+        "couverture_min_pct": "Couverture minimale exigée, en %"
+      },
+      "niveau": "avance",
+      "phrase_parties_max": "La somme de « {amount} » ne doit jamais dépasser le total « {total_value} ».",
+      "phrase_couverture_min": "Le détail de « {amount} » doit couvrir au moins {couverture_min_pct} % du total « {total_value} »."
     },
     {
       "template_id": "COUNT_RECONCILIATION",
@@ -102,7 +215,17 @@
       "params_optionnels": "group_by",
       "description_logique": "Le nombre de lignes concorde avec le dataset de reference",
       "kpi_produit": "ecart en nombre de lignes",
-      "exemple_params": "{\"ref_dataset\": \"bis_turnover\"}"
+      "exemple_params": "{\"ref_dataset\": \"bis_turnover\"}",
+      "libelle_metier": "Avoir le bon nombre de lignes",
+      "question_metier": "À quel fichier le nombre de lignes doit-il correspondre ?",
+      "explication": "Le contrôle échoue si les effectifs divergent entre les deux fichiers.",
+      "exemple_metier": "Après un transfert, le fichier reçu doit contenir autant de lignes que le fichier envoyé.",
+      "phrase": "Le nombre de lignes doit correspondre à celui de « {ref_dataset} ».",
+      "params_libelles": {
+        "ref_dataset": "Fichier de référence",
+        "group_by": "Comparer par sous-ensemble (facultatif)"
+      },
+      "niveau": "avance"
     },
     {
       "template_id": "CUSTOM_EXPRESSION",
@@ -111,280 +234,23 @@
       "params_optionnels": "description_metier",
       "description_logique": "Expression pandas evaluee ligne a ligne ; doit etre vraie partout",
       "kpi_produit": "% de lignes conformes",
-      "exemple_params": "{\"expression\": \"DER_CURR_LEG1 != DER_CURR_LEG2\"}"
+      "exemple_params": "{\"expression\": \"DER_CURR_LEG1 != DER_CURR_LEG2\"}",
+      "libelle_metier": "Règle sur mesure",
+      "question_metier": "Quelle condition doit être vraie sur chaque ligne ?",
+      "explication": "Réservé aux profils techniques : la condition est écrite en syntaxe pandas et évaluée ligne à ligne.",
+      "exemple_metier": "devise_achat != devise_vente",
+      "phrase": "Chaque ligne doit vérifier : {expression}.",
+      "params_libelles": {
+        "expression": "Condition à vérifier",
+        "description_metier": "Traduction en français de la condition"
+      },
+      "niveau": "avance"
     }
   ],
   "datasets": {
     "bis_turnover": {
       "libelle": "BIS Triennial Survey - OTC derivatives turnover (format long)",
       "source": "data/prepared/bis_turnover.csv",
-      "proprietaire": "Market Data Office",
-      "colonnes": [
-        {
-          "colonne": "observation_id",
-          "type": "string",
-          "role": "identifiant",
-          "cle_primaire": "OUI",
-          "obligatoire": "OUI",
-          "description": "Cle composee des 14 dimensions + annee",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "FREQ",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Frequence de la serie",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_TYPE",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Type de mesure",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_INSTR",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Instrument",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_RISK",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Categorie de risque",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_REP_CTY",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Pays declarant",
-          "fk_dataset": "ref_pays",
-          "fk_colonne": "code_pays"
-        },
-        {
-          "colonne": "DER_SECTOR_CPY",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Secteur de la contrepartie",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_CPC",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Pays de la contrepartie",
-          "fk_dataset": "ref_pays",
-          "fk_colonne": "code_pays"
-        },
-        {
-          "colonne": "DER_SECTOR_UDL",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Secteur du sous-jacent",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_CURR_LEG1",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Devise jambe 1",
-          "fk_dataset": "ref_devises",
-          "fk_colonne": "code_devise"
-        },
-        {
-          "colonne": "DER_CURR_LEG2",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Devise jambe 2",
-          "fk_dataset": "ref_devises",
-          "fk_colonne": "code_devise"
-        },
-        {
-          "colonne": "DER_ISSUE_MAT",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Maturite",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_RATING",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Notation ou reglement",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_EX_METHOD",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Methode d'execution",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "DER_BASIS",
-          "type": "string",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Base brute ou nette",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Instrument",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle instrument",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Risk category",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle risque",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Reporting country",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle pays declarant",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Counterparty sector",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle secteur contrepartie",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Currency leg 1",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle devise 1",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Currency leg 2",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle devise 2",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Execution method",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle methode d'execution",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "Basis",
-          "type": "string",
-          "role": "libelle",
-          "cle_primaire": "NON",
-          "obligatoire": "NON",
-          "description": "Libelle base",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "annee",
-          "type": "integer",
-          "role": "code",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Annee de l'enquete triennale",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "date_observation",
-          "type": "date",
-          "role": "date_evenement",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Fin de periode observee",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        },
-        {
-          "colonne": "turnover_notionnel",
-          "type": "decimal",
-          "role": "mesure",
-          "cle_primaire": "NON",
-          "obligatoire": "OUI",
-          "description": "Montant notionnel, moyenne journaliere, USD millions",
-          "fk_dataset": "",
-          "fk_colonne": ""
-        }
-      ]
-    },
-    "bis_turnover_demo": {
-      "libelle": "Extrait enquete 2022 - jeu de demonstration",
-      "source": "data/prepared/bis_turnover_demo.csv",
       "proprietaire": "Market Data Office",
       "colonnes": [
         {
@@ -733,7 +599,7 @@
       "template": "NOT_NULL",
       "params": "{\"column\": \"turnover_notionnel\"}",
       "logic_definition": "COUNT(turnover_notionnel IS NULL) = 0",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 0,
       "severity": "Critical",
@@ -743,8 +609,8 @@
       "kpi": "% de completude",
       "remediation_action": "Rejeter la publication et redemander l'extraction a la source BIS.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ02",
@@ -775,7 +641,7 @@
       "template": "RANGE",
       "params": "{\"column\": \"turnover_notionnel\", \"min\": 0}",
       "logic_definition": "turnover_notionnel >= 0",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -785,8 +651,8 @@
       "kpi": "% de valeurs dans la plage",
       "remediation_action": "Escalade au Market Data Office ; verifier le signe a la source.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ04",
@@ -796,7 +662,7 @@
       "template": "IN_DOMAIN",
       "params": "{\"column\": \"DER_BASIS\", \"values\": [\"A\", \"B\", \"C\"]}",
       "logic_definition": "DER_BASIS IN ('A','B','C')",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "DER_BASIS",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -806,8 +672,8 @@
       "kpi": "% de valeurs valides",
       "remediation_action": "Corriger le mapping de codification a l'ingestion.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ05",
@@ -817,7 +683,7 @@
       "template": "MATCHES_REGEX",
       "params": "{\"column\": \"DER_CURR_LEG1\", \"pattern\": \"^([A-Z]{3}|TO1)$\"}",
       "logic_definition": "DER_CURR_LEG1 respecte ^([A-Z]{3}|TO1)$",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "DER_CURR_LEG1",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -827,8 +693,8 @@
       "kpi": "% de valeurs valides",
       "remediation_action": "Normaliser le code ou l'ajouter au referentiel apres arbitrage.",
       "statut": "Actif",
-      "version": 2,
-      "effective_from": "2026-09-07"
+      "version": 3,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ06",
@@ -838,7 +704,7 @@
       "template": "RANGE",
       "params": "{\"column\": \"annee\", \"min\": 1986, \"max\": 2022}",
       "logic_definition": "annee BETWEEN 1986 AND 2022",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "annee",
       "seuil_tolerance_pct": 0,
       "severity": "Medium",
@@ -848,8 +714,8 @@
       "kpi": "% de valeurs dans la plage",
       "remediation_action": "Etendre la borne haute a chaque nouvelle vague d'enquete.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ07",
@@ -880,7 +746,7 @@
       "template": "FOREIGN_KEY",
       "params": "{\"column\": \"DER_CURR_LEG1\", \"ref_dataset\": \"ref_devises\", \"ref_column\": \"code_devise\"}",
       "logic_definition": "DER_CURR_LEG1 IN (SELECT code_devise FROM ref_devises)",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "DER_CURR_LEG1",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -890,8 +756,8 @@
       "kpi": "% de valeurs rattachees",
       "remediation_action": "Arbitrage Data Steward : enrichir le referentiel ou rejeter la ligne.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ09",
@@ -901,7 +767,7 @@
       "template": "FOREIGN_KEY",
       "params": "{\"column\": \"DER_CURR_LEG2\", \"ref_dataset\": \"ref_devises\", \"ref_column\": \"code_devise\"}",
       "logic_definition": "DER_CURR_LEG2 IN (SELECT code_devise FROM ref_devises)",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "DER_CURR_LEG2",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -911,8 +777,8 @@
       "kpi": "% de valeurs rattachees",
       "remediation_action": "Arbitrage Data Steward : enrichir le referentiel ou rejeter la ligne.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ10",
@@ -922,7 +788,7 @@
       "template": "FOREIGN_KEY",
       "params": "{\"column\": \"DER_REP_CTY\", \"ref_dataset\": \"ref_pays\", \"ref_column\": \"code_pays\"}",
       "logic_definition": "DER_REP_CTY IN (SELECT code_pays FROM ref_pays)",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "DER_REP_CTY",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -932,8 +798,8 @@
       "kpi": "% de valeurs rattachees",
       "remediation_action": "Arbitrage Data Steward : enrichir le referentiel ou rejeter la ligne.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ11",
@@ -943,7 +809,7 @@
       "template": "CUSTOM_EXPRESSION",
       "params": "{\"expression\": \"(DER_CURR_LEG1 != DER_CURR_LEG2) or (DER_CURR_LEG1 == 'TO1')\", \"description_metier\": \"Hors totaux, les deux jambes different\"}",
       "logic_definition": "DER_CURR_LEG1 <> DER_CURR_LEG2 OU DER_CURR_LEG1 = 'TO1'",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "DER_CURR_LEG1, DER_CURR_LEG2",
       "seuil_tolerance_pct": 0.5,
       "severity": "Medium",
@@ -953,8 +819,8 @@
       "kpi": "% de lignes conformes",
       "remediation_action": "Verifier la paire a la source ; requalifier en total si agregat.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ12",
@@ -964,7 +830,7 @@
       "template": "FRESHNESS",
       "params": "{\"column\": \"date_observation\", \"max_lag_days\": 1460}",
       "logic_definition": "MAX(date_observation) >= AUJOURDHUI - 1460 jours",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "date_observation",
       "seuil_tolerance_pct": 0,
       "severity": "High",
@@ -974,8 +840,8 @@
       "kpi": "age maximum en jours",
       "remediation_action": "Declencher l'integration de la vague d'enquete suivante.",
       "statut": "Actif",
-      "version": 1,
-      "effective_from": "2026-09-07"
+      "version": 2,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ13",
@@ -985,7 +851,7 @@
       "template": "SUM_RECONCILIATION",
       "params": "{\"amount\": \"turnover_notionnel\", \"total_column\": \"DER_REP_CTY\", \"total_value\": \"5J\", \"group_by\": [\"annee\", \"DER_INSTR\", \"DER_RISK\", \"DER_SECTOR_CPY\", \"DER_CPC\", \"DER_CURR_LEG1\", \"DER_CURR_LEG2\", \"DER_ISSUE_MAT\", \"DER_RATING\", \"DER_EX_METHOD\", \"DER_BASIS\"], \"sens\": \"parties_max\", \"tolerance_pct\": 0.1}",
       "logic_definition": "SUM(pays declarants) <= total 5J + 0.1%",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 0,
       "severity": "Critical",
@@ -995,8 +861,8 @@
       "kpi": "depassement maximal %",
       "remediation_action": "Blocage : investiguer le double comptage avec le Market Data Office avant publication.",
       "statut": "Actif",
-      "version": 2,
-      "effective_from": "2026-09-07"
+      "version": 3,
+      "effective_from": "2026-09-08"
     },
     {
       "rule_id": "DQ14",
@@ -1048,7 +914,7 @@
       "template": "SUM_RECONCILIATION",
       "params": "{\"amount\": \"turnover_notionnel\", \"total_column\": \"DER_REP_CTY\", \"total_value\": \"5J\", \"group_by\": [\"annee\", \"DER_INSTR\", \"DER_RISK\", \"DER_SECTOR_CPY\", \"DER_CPC\", \"DER_CURR_LEG1\", \"DER_CURR_LEG2\", \"DER_ISSUE_MAT\", \"DER_RATING\", \"DER_EX_METHOD\", \"DER_BASIS\"], \"sens\": \"couverture_min\", \"couverture_min_pct\": 95.0}",
       "logic_definition": "SUM(pays declarants) / total 5J >= 95%",
-      "dataset_scope": "bis_turnover,bis_turnover_demo",
+      "dataset_scope": "bis_turnover",
       "data_element": "turnover_notionnel",
       "seuil_tolerance_pct": 20,
       "severity": "Medium",
@@ -1058,8 +924,29 @@
       "kpi": "couverture mediane %",
       "remediation_action": "Documenter les juridictions non publiees dans la note methodologique accompagnant la diffusion.",
       "statut": "Actif",
+      "version": 2,
+      "effective_from": "2026-09-08"
+    },
+    {
+      "rule_id": "DQ17",
+      "control_name": "COMPLETENESS_2",
+      "control_type": "Completeness",
+      "description": "",
+      "template": "NOT_NULL",
+      "params": "{\"column\": \"annee\"}",
+      "logic_definition": "",
+      "dataset_scope": "bis_turnover",
+      "data_element": "annee",
+      "seuil_tolerance_pct": 0.9,
+      "severity": "Medium",
+      "frequency": "Trimestrielle",
+      "owner": "Data Steward",
+      "output_type": "Exception report",
+      "kpi": "% de completude",
+      "remediation_action": "",
+      "statut": "Actif",
       "version": 1,
-      "effective_from": "2026-09-07"
+      "effective_from": "2026-09-08"
     }
   ],
   "changelog": [
@@ -1392,6 +1279,266 @@
       "avant": "",
       "apres": "Couverture du detail par pays declarant",
       "motif": "Contrepartie de la scission de DQ13 : l'ecart residuel mesure la completude du detail geographique, pas une erreur de calcul. Seuil a 20% d'agregats en exception, calibre sur le percentile observe au run RUN-20260907-170144."
+    },
+    {
+      "timestamp": "2026-09-08T09:36:49",
+      "utilisateur": "data.steward",
+      "action": "CREATION",
+      "rule_id": "DQ17",
+      "champ": "*",
+      "avant": "",
+      "apres": "COMPLETENESS_2",
+      "motif": "Creation via l'interface"
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ01",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ01",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ03",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ03",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ04",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ04",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ05",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ05",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ06",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ06",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ08",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ08",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ09",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ09",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ10",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ10",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ11",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ11",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ12",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ12",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ13",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ13",
+      "champ": "version",
+      "avant": "2",
+      "apres": "3",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "MODIFICATION",
+      "rule_id": "DQ16",
+      "champ": "dataset_scope",
+      "avant": "bis_turnover,bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "VERSION",
+      "rule_id": "DQ16",
+      "champ": "version",
+      "avant": "1",
+      "apres": "2",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
+    },
+    {
+      "timestamp": "2026-09-08T09:54:38",
+      "utilisateur": "data.steward",
+      "action": "DATASET_FUSION",
+      "rule_id": "bis_turnover_demo",
+      "champ": "contrat",
+      "avant": "bis_turnover_demo",
+      "apres": "bis_turnover",
+      "motif": "Modele 'un run = un fichier' : un contrat decrit une structure, pas un fichier. bis_turnover_demo declarait les memes colonnes que bis_turnover ; les deux entrees rendaient la detection automatique ambigue. L'extrait de demonstration respecte desormais le contrat bis_turnover, comme le fichier complet."
     }
   ]
 }

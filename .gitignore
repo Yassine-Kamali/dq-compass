@@ -8,6 +8,11 @@ __pycache__/
 data/raw/*.csv
 data/prepared/
 
+# Fichiers deposes par l'utilisateur via l'interface : ce sont des donnees
+# de travail, pas du code. Le dossier lui-meme est versionne.
+data/entrees/*
+!data/entrees/.gitkeep
+
 # Sorties d'execution : produites a chaque run, jamais editees a la main.
 evidence/
 reporting/sorties/

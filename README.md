@@ -21,7 +21,7 @@ python -m venv .venv
 # .venv/bin/pip install -r requirements.txt          # macOS / Linux
 
 ./.venv/Scripts/python.exe engine/prepare_bis.py     # extrait le zip et prépare les données
-./.venv/Scripts/python.exe tests/test_dq.py          # 46 tests, doit finir à 46/46
+./.venv/Scripts/python.exe tests/test_dq.py          # 60 tests, doit finir à 60/60
 ```
 
 Seul le zip source (4,8 Mo) est versionné. `prepare_bis.py` l'extrait au premier
@@ -31,10 +31,12 @@ secondes, avec des empreintes SHA-256 identiques d'une machine à l'autre.
 ### Au quotidien
 
 ```bash
-./.venv/Scripts/python.exe engine/prepare_bis.py            # préparer les données (une fois)
-./.venv/Scripts/python.exe reporting/excel_report.py        # run + classeur Excel
-./.venv/Scripts/python.exe -m streamlit run ui/app.py       # interface
-./.venv/Scripts/python.exe tests/test_dq.py                 # 46 tests
+./.venv/Scripts/python.exe -m streamlit run ui/app.py       # interface — le chemin normal
+./.venv/Scripts/python.exe tests/test_dq.py                 # 60 tests
+
+# en ligne de commande : un fichier à la fois, le contrat est deviné
+./.venv/Scripts/python.exe reporting/excel_report.py data/prepared/bis_turnover.csv
+./.venv/Scripts/python.exe engine/dq_engine.py data/ref/ref_devises.csv
 ```
 
 Un venv est déjà installé à la racine. Sur une autre machine :
@@ -60,6 +62,31 @@ catalogue.
 
 L'interface (`ui/app.py`) pilote le catalogue ; elle ne contient aucune logique
 de contrôle.
+
+### Un run = un fichier
+
+On dépose **un seul fichier**. Le moteur reconnaît de quoi il s'agit en
+comparant ses colonnes aux contrats déclarés, puis applique les règles qui
+concernent ce contrat. Les référentiels ne sont pas des fichiers à fournir :
+le moteur va les chercher lui-même quand un contrôle d'intégrité en a besoin,
+et les empreinte comme toute autre source.
+
+Un contrat décrit une **structure**, pas un fichier : l'extrait de
+démonstration et le fichier complet respectent le même contrat `bis_turnover`.
+
+### Aucun jargon dans l'interface
+
+Un utilisateur qui n'est pas data ne voit jamais `MATCHES_REGEX` ni
+`{"column": "montant"}`. Il lit « Respecter un format précis » et « La colonne
+Montant doit respecter le format ^[0-9]+$ ». Ce vocabulaire est porté par le
+**catalogue** (`libelle_metier`, `question_metier`, `phrase`,
+`params_libelles`), pas par le code de l'interface : ajouter un template suffit
+à le rendre pilotable en langage clair.
+
+L'éditeur guide en quatre étapes — que vérifier, sur quoi, que faire en cas
+d'écart, comment nommer la règle — et refuse d'enregistrer tant que le nom, la
+raison d'être et l'action de remédiation manquent. Les tolérances sont
+proposées en clair plutôt qu'en champ numérique libre.
 
 **Excel est une sortie, pas une entrée.** Le métier consomme le classeur ; il
 édite les règles par l'interface. Le store JSON est la source de vérité, ce qui
@@ -101,7 +128,7 @@ appliquer tous les contrôles transverses.
 
 | Onglet | Contenu |
 |---|---|
-| `SYNTHESE` | Scorecard : bandeau KPI, une ligne par contrôle, feux tricolores |
+| `SYNTHESE` | **Nombre de contrôles en échec en premier et en grand**, puis le détail : une ligne par contrôle, sa traduction en français, feux tricolores |
 | `EXCEPTIONS` | Détail ligne à ligne, filtrable par règle et sévérité |
 | `COUVERTURE` | Dimensions × datasets, trous de couverture, répartition par sévérité |
 | `EVIDENCE` | Run ID, empreintes SHA-256 des sources et du catalogue, rejets |
@@ -115,8 +142,8 @@ appliquer tous les contrôles transverses.
 BIS Triennial Survey, OTC derivatives turnover — 77 992 lignes brutes,
 **425 371 observations** après passage en format long.
 
-Run complet : **4,6 s**, rapport Excel inclus. 19 contrôles, 6 dimensions,
-17 PASS / 2 FAIL.
+Run complet : **6,7 s**, rapport Excel et chargement des référentiels inclus. 15 contrôles applicables au
+contrat `bis_turnover`, 6 dimensions, 13 PASS / 2 FAIL.
 
 Les deux échecs sont de vrais constats métier :
 
@@ -150,36 +177,48 @@ Même arithmétique, deux dimensions, deux propriétaires, deux remédiations.
 
 ## Séquence de démonstration
 
-1. **Le classeur** (2 min) — ouvrir un rapport. Scorecard, exceptions, couverture,
-   evidence. C'est ce que le métier reçoit.
-2. **Modifier une règle** (2 min) — interface → Catalogue → DQ03 → passer le
-   seuil à 0,01 % → constater la version qui s'incrémente → Journal → la ligne
-   apparaît avec le motif.
-3. **Le validateur** (1 min) — créer un contrôle `RANGE` sur `DER_BASIS` (une
-   colonne texte). Le moteur refuse avant exécution, avec un message clair.
-   Un contrôle malformé ne casse jamais un run.
-4. **La suppression refusée** (30 s) — cliquer Supprimer. L'outil explique
-   pourquoi l'audit l'interdit et oriente vers Suspendre.
-5. **Le dataset inconnu** (90 s) — onglet Datasets → déclarer un contrat de
-   colonnes → relancer. Les contrôles transverses (`*` et par rôle) s'appliquent
-   seuls. Zéro règle écrite, zéro code modifié.
-6. **La reproductibilité** (30 s) — relancer le même run. Empreintes identiques,
-   résultats identiques, `run_id` différent.
+1. **Déposer un fichier** (90 s) — écran *Contrôler un fichier* → déposer
+   `bis_turnover_demo.csv`. Le système annonce « Fichier reconnu : BIS
+   Triennial Survey, 100 % des colonnes attendues », liste les règles
+   applicables, puis lance. **Le nombre de contrôles en échec s'affiche en
+   premier, en grand**, suivi de qui doit faire quoi.
+2. **Le classeur** (90 s) — télécharger le rapport. Même hiérarchie : les
+   échecs d'abord, chaque règle traduite en français, puis exceptions,
+   couverture, preuves. C'est ce que le métier reçoit.
+3. **Créer une règle sans être data** (2 min) — écran *Règles de contrôle* →
+   *Créer une règle*. On choisit « Ne jamais être vide », pas `NOT_NULL`. Le
+   récapitulatif écrit la phrase en français. Le bouton reste bloqué tant que
+   l'action de remédiation manque : on ne peut pas produire une règle orpheline.
+4. **Le validateur** (1 min) — choisir « Rester dans des bornes chiffrées » sur
+   `DER_BASIS`, une colonne texte. Refus immédiat, message clair, avant
+   exécution. Une règle malformée ne casse jamais un contrôle.
+5. **La suppression refusée** (30 s) — cliquer Supprimer. L'outil explique que
+   les rapports déjà produits doivent rester explicables, et oriente vers
+   *Mettre en pause*.
+6. **Le fichier inconnu** (90 s) — déposer un fichier non décrit : le système
+   dit qu'il ne le reconnaît pas et renvoie vers *Fichiers connus*. Y décrire
+   ses colonnes, redéposer : les règles transverses (`*` et par rôle)
+   s'appliquent seules. Zéro règle écrite, zéro code modifié.
+7. **La reproductibilité** (30 s) — relancer le même fichier. Empreintes
+   identiques, résultats identiques, `run_id` différent.
 
 ---
 
 ## Arborescence
 
 ```
-catalogue/store.json        source de vérité (templates, datasets, contrôles, journal)
+catalogue/store.json        source de vérité (templates, contrats, contrôles, journal)
 engine/store.py             CRUD + versionnement + journal d'audit
 engine/dq_engine.py         validateur, 12 exécuteurs, runner, evidence pack
 engine/prepare_bis.py       préparation des données et des référentiels
 engine/bootstrap_store.py   initialisation du catalogue
 engine/apply_calibration.py calibrages tracés du premier run
+engine/add_libelles_metier.py couche de langage métier des templates
+engine/fusion_contrats.py   fusion des contrats redondants
+data/entrees/               fichiers déposés via l'interface
 reporting/excel_report.py   classeur six onglets
 ui/app.py                   interface Streamlit, quatre écrans
-tests/test_dq.py            46 tests, sans dépendance externe
+tests/test_dq.py            60 tests, sans dépendance externe
 data/raw/                   source BIS d'origine
 data/prepared/              format long + extrait de démonstration
 data/ref/                   référentiels devises et pays

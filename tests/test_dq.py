@@ -24,9 +24,13 @@ sys.path.insert(0, str(ROOT / "reporting"))
 
 import dq_engine as E  # noqa: E402
 from excel_report import build_workbook  # noqa: E402
-from store import CatalogueStore  # noqa: E402
+from store import (CatalogueStore, libelle_severite,  # noqa: E402
+                   phrase_controle)
 
 RESULTS: list[tuple[str, bool, str]] = []
+
+# Le fichier servant de reference aux tests bout en bout.
+FICHIER_DEMO = ROOT / "data" / "prepared" / "bis_turnover_demo.csv"
 
 
 def check(nom: str):
@@ -415,43 +419,156 @@ def _():
 
 
 # --------------------------------------------------------------------------- #
-# 5. Moteur bout en bout sur le catalogue reel
+# 5. Reconnaissance du fichier et langage metier
+# --------------------------------------------------------------------------- #
+@check("detection: un fichier BIS est rattache a son contrat a 100%")
+def _():
+    st = CatalogueStore()
+    df = E.charger_fichier(FICHIER_DEMO)
+    candidats = E.detecter_contrat(df.columns, st)
+    eq(candidats[0][0], "bis_turnover", "contrat detecte")
+    eq(candidats[0][1], 1.0, "taux de recouvrement")
+
+
+@check("detection: un referentiel n'est pas confondu avec un fichier large")
+def _():
+    st = CatalogueStore()
+    df = E.charger_fichier(ROOT / "data" / "ref" / "ref_devises.csv")
+    candidats = dict(E.detecter_contrat(df.columns, st))
+    eq(candidats["ref_devises"], 1.0, "le referentiel se reconnait")
+    assert candidats["bis_turnover"] < 0.1, candidats
+
+
+@check("detection: un fichier inconnu est refuse avec ses candidats")
+def _():
+    st = CatalogueStore()
+    inconnu = TMP / "inconnu.csv"
+    pd.DataFrame({"aaa": [1], "bbb": [2]}).to_csv(inconnu, index=False)
+    try:
+        E.run_dq(inconnu, store=st, write_evidence=False)
+    except E.ContratIntrouvable as exc:
+        assert exc.candidats, "les candidats doivent accompagner le refus"
+        return
+    raise AssertionError("un fichier inconnu aurait du etre refuse")
+
+
+@check("detection: le contrat peut etre impose plutot que devine")
+def _():
+    st = CatalogueStore()
+    run = E.run_dq(FICHIER_DEMO, dataset="bis_turnover", store=st,
+                   write_evidence=False)
+    eq(run.contrat, "bis_turnover", "contrat impose")
+
+
+@check("chargement: CSV et Excel sont acceptes, les autres formats refuses")
+def _():
+    chemin = TMP / "petit.xlsx"
+    pd.DataFrame({"a": [1, 2]}).to_excel(chemin, index=False)
+    eq(len(E.charger_fichier(chemin)), 2, "lecture Excel")
+    mauvais = TMP / "note.docx"
+    mauvais.write_text("x", encoding="utf-8")
+    try:
+        E.charger_fichier(mauvais)
+    except ValueError:
+        return
+    raise AssertionError("un format non gere aurait du etre refuse")
+
+
+@check("langage metier: chaque template porte un libelle comprehensible")
+def _():
+    st = CatalogueStore()
+    sans = [t["template_id"] for t in st.templates if not t.get("libelle_metier")]
+    eq(sans, [], "templates sans libelle metier")
+
+
+@check("langage metier: chaque controle se rend en une phrase francaise")
+def _():
+    st = CatalogueStore()
+    for c in st.controls:
+        phrase = phrase_controle(c, st)
+        assert phrase and len(phrase) > 15, f"{c['rule_id']} : phrase vide ou trop courte"
+        # Un gabarit non rempli laisserait un nom de parametre entre accolades.
+        # Les accolades venant d'une valeur -- une expression reguliere comme
+        # ^([A-Z]{3}|TO1)$ -- sont legitimes et ne doivent pas alerter.
+        tpl = st.template(c["template"])
+        restants = [p for p in tpl.get("params_libelles", {}) if "{" + p + "}" in phrase]
+        eq(restants, [], f"{c['rule_id']} : parametres non substitues dans « {phrase} »")
+        assert "…" not in phrase, f"{c['rule_id']} : parametre manquant -> {phrase}"
+
+
+@check("langage metier: la phrase s'adapte au ciblage et au mode d'execution")
+def _():
+    st = CatalogueStore()
+    eq(phrase_controle(st.control("DQ02"), st),
+       "Toute information de type « identifiant » doit être renseignée.", "par role")
+    eq(phrase_controle(st.control("DQ03"), st),
+       "La colonne « turnover_notionnel » doit être supérieure ou égale à 0.",
+       "borne minimale seule")
+    assert "ne doit jamais dépasser" in phrase_controle(st.control("DQ13"), st)
+    assert "couvrir au moins" in phrase_controle(st.control("DQ16"), st)
+
+
+@check("langage metier: les severites sont traduites")
+def _():
+    eq(libelle_severite("Critical"), "Bloquant", "Critical")
+    eq(libelle_severite("Low"), "Mineur", "Low")
+
+
+# --------------------------------------------------------------------------- #
+# 6. Moteur bout en bout sur le catalogue reel
 # --------------------------------------------------------------------------- #
 @check("moteur: run complet sur les donnees BIS, aucun rejet ni erreur")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["bis_turnover_demo", "ref_devises", "ref_pays"],
-                   store=st, run_label="test", write_evidence=False)
+    run = E.run_dq(FICHIER_DEMO, store=st, run_label="test", write_evidence=False)
     s = run.summary()
     eq(s["erreur"], 0, "aucune erreur d'execution")
     eq(s["rejets"], 0, "aucun controle rejete")
-    assert s["controles"] >= 15, f"trop peu de controles executes : {s['controles']}"
+    assert s["controles"] >= 12, f"trop peu de controles executes : {s['controles']}"
 
 
 @check("moteur: les 6 dimensions du brief sont couvertes")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["bis_turnover_demo"], store=st, write_evidence=False)
-    couvertes = set(run.scorecard["dimension"])
+    run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     attendues = {"Completeness", "Validity", "Uniqueness", "Consistency",
                  "Timeliness", "Reconciliation"}
-    manquantes = attendues - couvertes
-    eq(manquantes, set(), "dimensions manquantes")
+    eq(attendues - set(run.scorecard["dimension"]), set(), "dimensions manquantes")
 
 
 @check("moteur: un controle non actif n'est jamais execute")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["bis_turnover"], store=st, write_evidence=False)
-    deprecies = {c["rule_id"] for c in st.controls if c["statut"] != "Actif"}
-    executes = set(run.scorecard["rule_id"])
-    eq(deprecies & executes, set(), "controles inactifs executes a tort")
+    run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
+    inactifs = {c["rule_id"] for c in st.controls if c["statut"] != "Actif"}
+    eq(inactifs & set(run.scorecard["rule_id"]), set(), "controles inactifs executes")
+
+
+@check("moteur: seuls les controles du perimetre du contrat s'executent")
+def _():
+    st = CatalogueStore()
+    run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
+                   write_evidence=False)
+    eq(run.contrat, "ref_devises", "contrat detecte")
+    assert "DQ01" not in set(run.scorecard["rule_id"]), \
+        "un controle propre au fichier BIS ne doit pas tourner sur un referentiel"
+    assert "DQ14" in set(run.scorecard["rule_id"]), "DQ14 cible ce referentiel"
+
+
+@check("moteur: le referentiel est charge tout seul pour l'integrite referentielle")
+def _():
+    st = CatalogueStore()
+    run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
+    sources = run.manifeste["sources"]
+    assert "ref_devises" in sources, \
+        "le referentiel doit etre charge sans que l'utilisateur le fournisse"
+    assert sources["ref_devises"]["sha256"], "et etre empreinte comme les autres"
 
 
 @check("moteur: l'orphelin CLS est detecte sur la jambe 2")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["bis_turnover_demo"], store=st, write_evidence=False)
+    run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     exc = run.exceptions
     cls = exc[(exc["rule_id"] == "DQ09") & (exc["valeur"] == "CLS")]
     eq(len(cls), 32, "32 lignes portant un code devise CLS inexistant au referentiel")
@@ -465,7 +582,8 @@ def _():
                     "params": '{"expression": "colonne_absente > 0"}',
                     "dataset_scope": "ref_devises", "severity": "Low",
                     "seuil_tolerance_pct": 0}, "test")
-    run = E.run_dq(datasets=["ref_devises"], store=st, write_evidence=False)
+    run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
+                   write_evidence=False)
     ligne = run.scorecard[run.scorecard["rule_id"] == "DQZZ"]
     eq(len(ligne), 1, "le controle produit une ligne de resultat")
     eq(ligne.iloc[0]["statut"], "ERREUR", "statut ERREUR et non un crash")
@@ -475,58 +593,84 @@ def _():
 @check("moteur: reproductibilite - deux runs donnent les memes empreintes et KPI")
 def _():
     st = CatalogueStore()
-    a = E.run_dq(datasets=["bis_turnover_demo"], store=st, write_evidence=False)
-    b = E.run_dq(datasets=["bis_turnover_demo"], store=st, write_evidence=False)
+    a = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
+    b = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
     eq(a.manifeste["catalogue_sha256"], b.manifeste["catalogue_sha256"], "hash catalogue")
-    eq(a.manifeste["sources"]["bis_turnover_demo"]["sha256"],
-       b.manifeste["sources"]["bis_turnover_demo"]["sha256"], "hash source")
-    ka = a.scorecard[["rule_id", "cible", "statut", "lignes_ko"]].to_dict("records")
-    kb = b.scorecard[["rule_id", "cible", "statut", "lignes_ko"]].to_dict("records")
-    eq(ka, kb, "resultats identiques")
+    eq(a.manifeste["sources"]["bis_turnover"]["sha256"],
+       b.manifeste["sources"]["bis_turnover"]["sha256"], "hash source")
+    colonnes = ["rule_id", "cible", "statut", "lignes_ko"]
+    eq(a.scorecard[colonnes].to_dict("records"),
+       b.scorecard[colonnes].to_dict("records"), "resultats identiques")
     assert a.run_id != b.run_id, "les run_id doivent differer"
 
 
 @check("moteur: l'evidence pack contient les six pieces attendues")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["ref_devises"], store=st, write_evidence=True)
-    attendus = ["manifest.json", "catalogue_snapshot.json", "results.json",
-                "rejets.json", "exceptions.csv", "execution.log"]
-    for nom in attendus:
+    run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
+                   write_evidence=True)
+    for nom in ["manifest.json", "catalogue_snapshot.json", "results.json",
+                "rejets.json", "exceptions.csv", "execution.log"]:
         assert (run.evidence_path / nom).exists(), f"piece manquante : {nom}"
     manifeste = json.loads((run.evidence_path / "manifest.json").read_text(encoding="utf-8"))
-    assert len(manifeste["catalogue_sha256"]) == 64, "empreinte du catalogue"
-    assert manifeste["sources"]["ref_devises"]["sha256"], "empreinte de la source"
+    eq(len(manifeste["catalogue_sha256"]), 64, "empreinte du catalogue")
+    assert manifeste["fichier_controle"].endswith("ref_devises.csv"), "fichier trace"
+    eq(manifeste["contrat_applique"], "ref_devises", "contrat trace")
     shutil.rmtree(run.evidence_path, ignore_errors=True)
 
 
-@check("moteur: un dataset declare mais absent du disque est signale, pas fatal")
+@check("moteur: un fichier introuvable est signale clairement")
 def _():
     st = CatalogueStore()
-    st.upsert_dataset("fantome", {"libelle": "x", "source": "data/absent.csv",
-                                  "colonnes": []}, "test", "test")
-    run = E.run_dq(datasets=["fantome", "ref_devises"], store=st, write_evidence=False)
-    assert any(r["dataset"] == "fantome" for r in run.rejets), "rejet attendu"
-    assert len(run.scorecard) > 0, "les autres datasets doivent quand meme tourner"
+    try:
+        E.run_dq(TMP / "jamais_vu.csv", store=st, write_evidence=False)
+    except FileNotFoundError:
+        return
+    raise AssertionError("un fichier absent aurait du lever FileNotFoundError")
 
 
 # --------------------------------------------------------------------------- #
-# 6. Rapport Excel
+# 7. Rapport Excel
 # --------------------------------------------------------------------------- #
 @check("rapport: le classeur contient les six onglets attendus")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["ref_devises", "ref_pays"], store=st, write_evidence=False)
+    run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
+                   write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport.xlsx")
-    onglets = pd.ExcelFile(chemin).sheet_names
-    eq(onglets, ["SYNTHESE", "EXCEPTIONS", "COUVERTURE", "EVIDENCE",
-                 "CATALOGUE_EXECUTE", "JOURNAL"], "onglets du classeur")
+    eq(pd.ExcelFile(chemin).sheet_names,
+       ["SYNTHESE", "EXCEPTIONS", "COUVERTURE", "EVIDENCE", "CATALOGUE_EXECUTE",
+        "JOURNAL"], "onglets du classeur")
+
+
+@check("rapport: le nombre d'echecs est le premier KPI de la synthese")
+def _():
+    st = CatalogueStore()
+    run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
+    chemin = build_workbook(run, st, TMP / "rapport_kpi.xlsx")
+    sy = pd.read_excel(chemin, "SYNTHESE", header=None)
+    libelles = [v for v in sy.iloc[5].tolist() if pd.notna(v)]
+    eq(libelles[0], "CONTROLES EN ECHEC", "premier libelle du bandeau")
+    valeurs = [v for v in sy.iloc[3].tolist() if pd.notna(v)]
+    eq(str(valeurs[0]), str(run.summary()["fail"] + run.summary()["erreur"]),
+       "premiere valeur du bandeau")
+
+
+@check("rapport: la synthese porte une colonne en langage metier")
+def _():
+    st = CatalogueStore()
+    run = E.run_dq(FICHIER_DEMO, store=st, write_evidence=False)
+    chemin = build_workbook(run, st, TMP / "rapport_phrase.xlsx")
+    texte = pd.read_excel(chemin, "SYNTHESE", header=None).astype(str).to_string()
+    assert "ce_qui_est_verifie" in texte, "colonne en langage metier absente"
+    assert "doit être renseignée sur chaque ligne" in texte, "phrase absente"
 
 
 @check("rapport: l'onglet EVIDENCE porte l'empreinte SHA-256 des sources")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["ref_devises"], store=st, write_evidence=False)
+    run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
+                   write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport2.xlsx")
     texte = pd.read_excel(chemin, "EVIDENCE", header=None).astype(str).to_string()
     assert run.manifeste["sources"]["ref_devises"]["sha256"] in texte, "hash source absent"
@@ -536,56 +680,76 @@ def _():
 @check("rapport: l'onglet COUVERTURE liste les controles non executes")
 def _():
     st = CatalogueStore()
-    run = E.run_dq(datasets=["ref_devises"], store=st, write_evidence=False)
+    run = E.run_dq(ROOT / "data" / "ref" / "ref_devises.csv", store=st,
+                   write_evidence=False)
     chemin = build_workbook(run, st, TMP / "rapport3.xlsx")
     texte = pd.read_excel(chemin, "COUVERTURE", header=None).astype(str).to_string()
     assert "DQ15" in texte, "le controle deprecie doit apparaitre comme trou de couverture"
 
 
 # --------------------------------------------------------------------------- #
-# 7. Interface Streamlit : les quatre ecrans se rendent sans exception
+# 8. Interface Streamlit : les ecrans se rendent sans exception
 # --------------------------------------------------------------------------- #
 def _apptest():
     from streamlit.testing.v1 import AppTest
-    return AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    return AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=180)
 
 
-@check("interface: l'ecran Catalogue se rend sans exception")
+def _page(nom: str):
+    at = _apptest().run()
+    at.sidebar.radio[0].set_value(nom).run()
+    assert not at.exception, at.exception
+    return at
+
+
+@check("interface: l'ecran Controler un fichier se rend sans exception")
 def _():
     at = _apptest().run()
     assert not at.exception, at.exception
 
 
-@check("interface: l'ecran Datasets se rend sans exception")
+@check("interface: l'ecran Regles de controle se rend sans exception")
 def _():
-    at = _apptest().run()
-    at.sidebar.radio[0].set_value("Datasets").run()
-    assert not at.exception, at.exception
+    at = _page("Règles de contrôle")
+    textes = " ".join(str(m.value) for m in at.markdown)
+    assert "Règles de contrôle" in textes or at.header, "en-tete absent"
 
 
-@check("interface: l'ecran Execution se rend sans exception")
+@check("interface: l'ecran Fichiers connus se rend sans exception")
 def _():
-    at = _apptest().run()
-    at.sidebar.radio[0].set_value("Execution").run()
-    assert not at.exception, at.exception
+    _page("Fichiers connus")
 
 
 @check("interface: l'ecran Journal se rend sans exception")
 def _():
-    at = _apptest().run()
-    at.sidebar.radio[0].set_value("Journal").run()
-    assert not at.exception, at.exception
+    _page("Journal")
 
 
-@check("interface: l'editeur de regle se rend et propose les templates")
+@check("interface: l'editeur propose les regles en langage metier, pas en template_id")
 def _():
-    at = _apptest().run()
-    boutons = [b for b in at.button if "Ajouter" in b.label]
-    assert boutons, "bouton d'ajout absent"
+    at = _page("Règles de contrôle")
+    boutons = [b for b in at.button if "Créer une règle" in b.label]
+    assert boutons, f"bouton de creation absent : {[b.label for b in at.button]}"
     boutons[0].click().run()
     assert not at.exception, at.exception
-    labels = [s.label for s in at.selectbox]
-    assert any("Template" in str(x) for x in labels), f"selecteur de template absent: {labels}"
+    options = [str(o) for r in at.radio for o in (r.options or [])]
+    assert any("Ne jamais être vide" in o for o in options), \
+        f"libelles metier absents des options : {options[:6]}"
+    assert not any("NOT_NULL" == o for o in options), \
+        "les identifiants techniques ne doivent pas etre proposes a l'utilisateur"
+
+
+@check("interface: l'editeur refuse d'enregistrer une regle incomplete")
+def _():
+    at = _page("Règles de contrôle")
+    [b for b in at.button if "Créer une règle" in b.label][0].click().run()
+    enregistrer = [b for b in at.button if "Enregistrer la règle" in b.label]
+    assert enregistrer, "bouton d'enregistrement absent"
+    assert enregistrer[0].disabled, \
+        "un formulaire vide ne doit pas pouvoir etre enregistre"
+    avertissements = " ".join(str(w.value) for w in at.warning)
+    assert "il manque encore" in avertissements.lower(), \
+        f"l'utilisateur doit savoir ce qui manque : {avertissements}"
 
 
 # --------------------------------------------------------------------------- #

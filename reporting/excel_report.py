@@ -18,7 +18,8 @@ import sys
 import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "engine"))
-from store import CatalogueStore  # noqa: E402
+from store import (CatalogueStore, libelle_severite,  # noqa: E402
+                   phrase_controle)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "reporting" / "sorties"
@@ -59,6 +60,24 @@ class _Fmt:
         self.kpi_val = wb.add_format({"bold": True, "font_size": 22, "align": "center",
                                       "valign": "vcenter", "border": 1,
                                       "border_color": "#DADCE0"})
+        # Le KPI d'echec est la seule tuile qui declenche une action : elle est
+        # plus grande que les autres et change de couleur selon le resultat.
+        self.kpi_alerte = wb.add_format({
+            "bold": True, "font_size": 34, "align": "center", "valign": "vcenter",
+            "font_color": ROUGE, "bg_color": ROUGE_BG, "border": 2,
+            "border_color": "#F2B8B5"})
+        self.kpi_ok = wb.add_format({
+            "bold": True, "font_size": 34, "align": "center", "valign": "vcenter",
+            "font_color": VERT, "bg_color": VERT_BG, "border": 2,
+            "border_color": "#A8DAB5"})
+        self.kpi_lib_alerte = wb.add_format({
+            "bold": True, "font_size": 10, "font_color": ROUGE, "bg_color": ROUGE_BG,
+            "align": "center", "valign": "vcenter", "border": 2,
+            "border_color": "#F2B8B5"})
+        self.kpi_lib_ok = wb.add_format({
+            "bold": True, "font_size": 10, "font_color": VERT, "bg_color": VERT_BG,
+            "align": "center", "valign": "vcenter", "border": 2,
+            "border_color": "#A8DAB5"})
         self.kpi_lib = wb.add_format({"font_size": 9, "font_color": GRIS, "align": "center",
                                       "valign": "vcenter", "border": 1,
                                       "border_color": "#DADCE0"})
@@ -104,58 +123,78 @@ def _write_table(ws, fmt: _Fmt, df: pd.DataFrame, start_row: int,
     return last + 3
 
 
-def _kpi_band(ws, fmt: _Fmt, row: int, tuiles: list[tuple[str, str]]) -> int:
-    """A row of large KPI tiles, two columns wide each."""
-    for i, (valeur, libelle) in enumerate(tuiles):
+def _kpi_band(ws, fmt: _Fmt, row: int, tuiles: list[tuple]) -> int:
+    """A row of large KPI tiles, two columns wide each.
+
+    A tile may carry its own pair of formats as a third element, so the tile
+    that matters most can be louder than the rest.
+    """
+    for i, tuile in enumerate(tuiles):
+        valeur, libelle = tuile[0], tuile[1]
+        f_val, f_lib = tuile[2] if len(tuile) > 2 else (fmt.kpi_val, fmt.kpi_lib)
         c = i * 3
-        ws.merge_range(row, c, row + 1, c + 1, valeur, fmt.kpi_val)
-        ws.merge_range(row + 2, c, row + 2, c + 1, libelle, fmt.kpi_lib)
-    ws.set_row(row, 26)
-    ws.set_row(row + 1, 20)
+        ws.merge_range(row, c, row + 1, c + 1, valeur, f_val)
+        ws.merge_range(row + 2, c, row + 2, c + 1, libelle, f_lib)
+    ws.set_row(row, 30)
+    ws.set_row(row + 1, 24)
     return row + 5
 
 
 # --------------------------------------------------------------------------- #
 # Sheets
 # --------------------------------------------------------------------------- #
-def _sheet_synthese(wb, fmt: _Fmt, run, sc: pd.DataFrame) -> None:
+def _sheet_synthese(wb, fmt: _Fmt, run, sc: pd.DataFrame,
+                    store: CatalogueStore) -> None:
     ws = wb.add_worksheet("SYNTHESE")
     ws.hide_gridlines(2)
     ws.write(0, 0, "DQ Compass - Scorecard qualite des donnees", fmt.titre)
-    ws.write(1, 0, f"Run {run.run_id} | {run.horodatage} | datasets : "
-                   f"{', '.join(run.datasets)}", fmt.sous_titre)
+    ws.write(1, 0, f"Fichier : {pathlib.Path(run.fichier).name or '-'}  |  "
+                   f"Contrat applique : {run.contrat}  |  Run {run.run_id}  |  "
+                   f"{run.horodatage}", fmt.sous_titre)
 
     s = run.summary()
     total = max(s["controles"], 1)
     conformite = 100.0 * s["pass"] / total
+    echecs = s["fail"] + s["erreur"]
     critiques = int(((sc["statut"] == "FAIL") & (sc["severity"].isin(
         ["Critical", "High"]))).sum()) if not sc.empty else 0
 
+    # Le nombre d'echecs vient en premier et en gros : c'est la seule chose qui
+    # appelle une decision. Le taux de conformite ne fait que rassurer.
+    alerte = (fmt.kpi_alerte, fmt.kpi_lib_alerte) if echecs else (
+        fmt.kpi_ok, fmt.kpi_lib_ok)
     row = _kpi_band(ws, fmt, 3, [
+        (str(echecs), "CONTROLES EN ECHEC", alerte),
+        (str(critiques), "dont Bloquant / Important",
+         alerte if critiques else (fmt.kpi_val, fmt.kpi_lib)),
+        (f"{s['exceptions']:,}".replace(",", " "), "Lignes a instruire"),
         (f"{conformite:.0f}%", "Taux de conformite"),
         (str(s["controles"]), "Controles executes"),
-        (str(s["fail"]), "En echec"),
-        (str(critiques), "Echecs Critical / High"),
-        (f"{s['exceptions']:,}".replace(",", " "), "Lignes en exception"),
-        (str(s["rejets"]), "Controles rejetes"),
+        (str(s["rejets"]), "Regles refusees"),
     ])
 
     ws.write(row, 0, "Detail par controle", fmt.section)
-    cols = ["rule_id", "control_name", "dimension", "dataset", "cible", "statut",
-            "kpi_nom", "kpi_valeur", "seuil_pct", "lignes_testees", "lignes_ko",
-            "taux_ko_pct", "severity", "owner", "frequency", "version",
+    table = sc.copy()
+    table.insert(2, "ce_qui_est_verifie",
+                 [phrase_controle(store.control(r) or {}, store)
+                  for r in table["rule_id"]])
+    table["gravite"] = table["severity"].map(libelle_severite)
+    cols = ["rule_id", "control_name", "ce_qui_est_verifie", "statut", "gravite",
+            "lignes_ko", "lignes_testees", "taux_ko_pct", "kpi_nom", "kpi_valeur",
+            "seuil_pct", "dimension", "cible", "owner", "frequency", "version",
             "remediation_action"]
-    table = sc[[c for c in cols if c in sc.columns]].copy()
+    table = table[[c for c in cols if c in table.columns]]
     table = table.sort_values(
-        ["statut", "severity", "rule_id"],
+        ["statut", "gravite", "rule_id"],
         key=lambda s: s.map({"FAIL": 0, "ERREUR": 1, "NON_APPLICABLE": 2, "PASS": 3,
-                             "Critical": 0, "High": 1, "Medium": 2, "Low": 3}).fillna(9)
-        if s.name in ("statut", "severity") else s)
+                             "Bloquant": 0, "Important": 1, "Moyen": 2,
+                             "Mineur": 3}).fillna(9)
+        if s.name in ("statut", "gravite") else s)
     _write_table(ws, fmt, table, row + 1,
-                 widths={"control_name": 38, "cible": 26, "kpi_nom": 22,
-                         "remediation_action": 55, "dataset": 20, "owner": 22,
-                         "description": 50},
-                 wrap_cols={"remediation_action", "control_name"})
+                 widths={"control_name": 38, "ce_qui_est_verifie": 62, "cible": 26,
+                         "kpi_nom": 22, "remediation_action": 55, "owner": 22},
+                 wrap_cols={"remediation_action", "control_name",
+                            "ce_qui_est_verifie"})
 
 
 def _sheet_exceptions(wb, fmt: _Fmt, run) -> None:
@@ -325,7 +364,7 @@ def build_workbook(run, store: CatalogueStore,
             "created": dt.datetime.now(),
         })
         fmt = _Fmt(wb)
-        _sheet_synthese(wb, fmt, run, sc)
+        _sheet_synthese(wb, fmt, run, sc, store)
         _sheet_exceptions(wb, fmt, run)
         _sheet_couverture(wb, fmt, run, sc, store)
         _sheet_evidence(wb, fmt, run)
@@ -339,8 +378,9 @@ def main() -> int:
     from dq_engine import run_dq  # noqa: PLC0415
 
     store = CatalogueStore()
-    datasets = sys.argv[1:] or ["bis_turnover_demo", "ref_devises", "ref_pays"]
-    run = run_dq(datasets=datasets, store=store, run_label="Rapport Excel")
+    fichier = sys.argv[1] if len(sys.argv) > 1 else "data/prepared/bis_turnover.csv"
+    contrat = sys.argv[2] if len(sys.argv) > 2 else None
+    run = run_dq(fichier, dataset=contrat, store=store, run_label="Rapport Excel")
     out = build_workbook(run, store)
     print(f"Classeur ecrit : {out}")
     print(f"Synthese       : {run.summary()}")
